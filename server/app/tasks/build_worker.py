@@ -174,6 +174,7 @@ def _save_state_to_db(db: Session, state: dict, project_id: str, build_id: str |
             artifact_type = art.get("artifact_type", "unknown"),
             title         = art.get("title", "Artifact"),
             content       = art.get("content", {}),
+            created_at    = art.get("created_at", datetime.now(timezone.utc))
         )
         db.add(row)
         db.flush()
@@ -196,6 +197,7 @@ def _save_state_to_db(db: Session, state: dict, project_id: str, build_id: str |
             message_type = msg["message_type"],
             content      = real_blocks,
             metadata_    = msg.get("metadata"),
+            created_at    = msg.get("created_at", datetime.now(timezone.utc))
         ))
 
     # ── Persist run_config to Build for cross-node reattach ───────

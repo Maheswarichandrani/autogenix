@@ -1,5 +1,4 @@
 "use client";
-
 import { useState } from "react";
 import {
     ExternalLink,
@@ -304,6 +303,15 @@ function PreviewContent({ device: _device }: { device: DeviceSize }) {
                     Describe features, get full apps. Data, hosting, auth, AI included.
                 </p>
             </div>
+ext-xs text-muted-foreground/60 mt-2">
+                        <span>Tip: Use</span>
+                        <kbd className="px-1.5 py-0.5 rounded bg-secondary/80 border border-border font-mono text-[10px]">
+                            ⌘P
+                        </kbd>
+                        <span>to quick open files</span>
+                    </div>
+                </div>
+            </motion.div>
         </div>
     );
 }

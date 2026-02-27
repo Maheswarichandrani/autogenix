@@ -33,12 +33,12 @@ import { streamingDebug } from "@/lib/streaming-debug";
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface InProgressMessage {
-  role:     string;
-  text:     string;
+  role: string;
+  text: string;
   artifact: {
     artifact_type: string;
-    title:         string;
-    content:       unknown;
+    title: string;
+    content: unknown;
   } | null;
 }
 
@@ -47,13 +47,13 @@ interface WorkflowStore {
   messages: Message[];
 
   // ── Workflow state
-  stage:        WorkflowStage;
-  active_role:  string | null;
+  stage: WorkflowStage;
+  active_role: string | null;
   is_streaming: boolean;
-  error:        string | null;
+  error: string | null;
 
   // ── Thinking indicator (single pulsing status bar — replaces itself)
-  isThinking:     boolean;
+  isThinking: boolean;
   thinkingStatus: string | null;
 
   // ── Step feed (Copilot-style timeline — each entry appends, never replaces)
@@ -63,25 +63,25 @@ interface WorkflowStore {
   inProgressMessage: InProgressMessage | null;
 
   // ── Actions
-  hydrateMessages:          (messages: Message[]) => void;
-  addOptimisticMessage:     (message: Message) => void;
+  hydrateMessages: (messages: Message[]) => void;
+  addOptimisticMessage: (message: Message) => void;
   confirmOptimisticMessage: (tempId: string, realId: string) => void;
-  removeOptimisticMessage:  (tempId: string) => void;
-  handleSSEEvent:           (event: SSEEvent) => void;
-  reset:                    () => void;
+  removeOptimisticMessage: (tempId: string) => void;
+  handleSSEEvent: (event: SSEEvent) => void;
+  reset: () => void;
 }
 
 // ─── Initial state ────────────────────────────────────────────────────────────
 
 const INITIAL_STATE = {
-  messages:          [] as Message[],
-  stage:             "idle" as WorkflowStage,
-  active_role:       null as string | null,
-  is_streaming:      false,
-  error:             null as string | null,
-  isThinking:        false,
-  thinkingStatus:    null as string | null,
-  stepFeed:          [] as StepFeedItem[],
+  messages: [] as Message[],
+  stage: "idle" as WorkflowStage,
+  active_role: null as string | null,
+  is_streaming: false,
+  error: null as string | null,
+  isThinking: false,
+  thinkingStatus: null as string | null,
+  stepFeed: [] as StepFeedItem[],
   inProgressMessage: null as InProgressMessage | null,
 };
 
@@ -92,8 +92,8 @@ function commitInProgress(ip: InProgressMessage): Message | null {
 
   if (ip.artifact) {
     content.push({
-      type:          "artifact",
-      artifact_id:   `artifact-${Date.now()}`,
+      type: "artifact",
+      artifact_id: `artifact-${Date.now()}`,
       artifact_data: ip.artifact,
     });
   }
@@ -105,11 +105,11 @@ function commitInProgress(ip: InProgressMessage): Message | null {
   if (content.length === 0) return null;
 
   return {
-    id:           `streamed-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    role:         ip.role as Message["role"],
+    id: `streamed-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    role: ip.role as Message["role"],
     message_type: "assistant_response",
     content,
-    created_at:   new Date().toISOString(),
+    created_at: new Date().toISOString(),
   };
 }
 
@@ -124,11 +124,11 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   ...INITIAL_STATE,
 
   hydrateMessages: (serverMessages: Message[]) => {
-    const current   = get().messages;
+    const current = get().messages;
     const optimistic = current.filter((m) => m.id.startsWith("temp-"));
-    const serverIds  = new Set(serverMessages.map((m) => m.id));
-    const pending    = optimistic.filter((m) => !serverIds.has(m.id));
-    
+    const serverIds = new Set(serverMessages.map((m) => m.id));
+    const pending = optimistic.filter((m) => !serverIds.has(m.id));
+
     // Merge and sort by created_at to maintain chronological order
     const merged = [...serverMessages, ...pending];
     merged.sort((a, b) => {
@@ -136,7 +136,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       const timeB = new Date(b.created_at).getTime();
       return timeA - timeB;
     });
-    
+
     set({ messages: merged });
   },
 
@@ -195,9 +195,9 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       // ── Thinking (replaces single status bar) ─────────────────
       case "thinking":
         set({
-          isThinking:     true,
+          isThinking: true,
           thinkingStatus: event.status,
-          active_role:    event.role ?? null,
+          active_role: event.role ?? null,
           stage: get().stage === "idle" ? "thinking" : get().stage,
         });
         break;
@@ -207,16 +207,16 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       // their data to this step row by matching the tool name.
       case "step": {
         const newStep: StepFeedItem = {
-          id:     makeStepId(),
-          tool:   event.tool,
+          id: makeStepId(),
+          tool: event.tool,
           status: event.status,
-          role:   event.role,
-          state:  "pending",
+          role: event.role,
+          state: "pending",
         };
         set((s) => ({
-          stepFeed:       [...s.stepFeed, newStep],
+          stepFeed: [...s.stepFeed, newStep],
           // Clear the pulsing "thinking" bar when an actual step begins
-          isThinking:     false,
+          isThinking: false,
           thinkingStatus: null,
         }));
         break;
@@ -246,9 +246,9 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
             if (feed[i].tool === event.tool && feed[i].state === "pending") {
               feed[i] = {
                 ...feed[i],
-                result:   event.result,
+                result: event.result,
                 is_error: event.is_error,
-                state:    "done",
+                state: "done",
               };
               break;
             }
@@ -264,13 +264,13 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         const toCommit = existing ? commitInProgress(existing) : null;
 
         set((s) => ({
-          active_role:       event.role,
-          is_streaming:      false,
-          isThinking:        false,
-          thinkingStatus:    null,
+          active_role: event.role,
+          is_streaming: false,
+          isThinking: false,
+          thinkingStatus: null,
           // Clear the step feed when a new agent starts — each agent
           // gets its own clean feed during its execution window.
-          stepFeed:          [],
+          stepFeed: [],
           inProgressMessage: { role: event.role, text: "", artifact: null },
           messages: toCommit ? [...s.messages, toCommit] : s.messages,
         }));
@@ -282,29 +282,29 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       // to trigger React re-renders as fast as possible
       case "text_chunk":
         streamingDebug.performance.startStreaming();
-        
+
         set((s) => {
           const currentMessage = s.inProgressMessage;
           const newText = currentMessage ? currentMessage.text + event.chunk : event.chunk;
-          
-          streamingDebug.store("TEXT_CHUNK", { 
+
+          streamingDebug.store("TEXT_CHUNK", {
             currentLength: currentMessage?.text?.length || 0,
             chunkLength: event.chunk.length,
-            newLength: newText.length 
+            newLength: newText.length
           });
-          
+
           return {
-            is_streaming:   true,
-            isThinking:     false,
+            is_streaming: true,
+            isThinking: false,
             thinkingStatus: null,
-            stepFeed:       [],  // clear step feed when text starts flowing
-            active_role:    event.role,
+            stepFeed: [],  // clear step feed when text starts flowing
+            active_role: event.role,
             inProgressMessage: currentMessage
               ? {
-                  role: currentMessage.role,
-                  text: newText,
-                  artifact: currentMessage.artifact,
-                }
+                role: currentMessage.role,
+                text: newText,
+                artifact: currentMessage.artifact,
+              }
               : { role: event.role, text: event.chunk, artifact: null },
           };
         });
@@ -314,8 +314,8 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       case "artifact": {
         const artifactData = {
           artifact_type: event.artifact_type,
-          title:         event.title,
-          content:       event.content,
+          title: event.title,
+          content: event.content,
         };
         set((s) => ({
           inProgressMessage: s.inProgressMessage
@@ -328,9 +328,9 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       // ── Agent done ────────────────────────────────────────────
       case "agent_done":
         set({
-          is_streaming:   false,
-          active_role:    null,
-          isThinking:     false,
+          is_streaming: false,
+          active_role: null,
+          isThinking: false,
           thinkingStatus: null,
         });
         break;
@@ -341,21 +341,21 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         set((s) => {
           const committed = ip ? commitInProgress(ip) : null;
           const updatedMessages = committed ? [...s.messages, committed] : s.messages;
-          
+
           // Sort by created_at to maintain chronological order
           updatedMessages.sort((a, b) => {
             const timeA = new Date(a.created_at).getTime();
             const timeB = new Date(b.created_at).getTime();
             return timeA - timeB;
           });
-          
+
           return {
-            messages:          updatedMessages,
+            messages: updatedMessages,
             inProgressMessage: null,
-            is_streaming:      false,
-            isThinking:        false,
-            thinkingStatus:    null,
-            stepFeed:          [],
+            is_streaming: false,
+            isThinking: false,
+            thinkingStatus: null,
+            stepFeed: [],
           };
         });
 
@@ -373,36 +373,36 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
             .includes(s.stage) && !["waiting_env", "complete", "error"].includes(s.stage)
             ? "idle"
             : s.stage,
-          is_streaming:   false,
-          isThinking:     false,
+          is_streaming: false,
+          isThinking: false,
           thinkingStatus: null,
-          stepFeed:       [],
+          stepFeed: [],
         }));
         break;
 
       // ── Build failed ──────────────────────────────────────────
       case "build_failed":
         set((s) => {
-          const ip        = s.inProgressMessage;
+          const ip = s.inProgressMessage;
           const committed = ip ? commitInProgress(ip) : null;
           const updatedMessages = committed ? [...s.messages, committed] : s.messages;
-          
+
           // Sort by created_at to maintain chronological order
           updatedMessages.sort((a, b) => {
             const timeA = new Date(a.created_at).getTime();
             const timeB = new Date(b.created_at).getTime();
             return timeA - timeB;
           });
-          
+
           return {
-            stage:             "error",
-            error:             (event as { reason?: string }).reason ?? "Build failed",
-            is_streaming:      false,
-            isThinking:        false,
-            thinkingStatus:    null,
+            stage: "error",
+            error: (event as { reason?: string }).reason ?? "Build failed",
+            is_streaming: false,
+            isThinking: false,
+            thinkingStatus: null,
             inProgressMessage: null,
-            stepFeed:          [],
-            messages:          updatedMessages,
+            stepFeed: [],
+            messages: updatedMessages,
           };
         });
         break;
@@ -410,13 +410,13 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       // ── Error ─────────────────────────────────────────────────
       case "error":
         set({
-          stage:             "error",
-          error:             event.message,
-          is_streaming:      false,
-          isThinking:        false,
-          thinkingStatus:    null,
+          stage: "error",
+          error: event.message,
+          is_streaming: false,
+          isThinking: false,
+          thinkingStatus: null,
           inProgressMessage: null,
-          stepFeed:          [],
+          stepFeed: [],
         });
         break;
     }

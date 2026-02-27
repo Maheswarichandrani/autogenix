@@ -42,7 +42,7 @@ export function UserMessage({ message }: UserMessageProps) {
       </div>
 
       {/* Message Content */}
-      <div 
+      <div
         className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-3 py-2 cursor-default"
         title={formatTime(message.created_at)}
       >
