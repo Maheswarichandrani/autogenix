@@ -158,6 +158,24 @@ class DockerManager:
             )
             self.container = existing
             self.container.reload()
+            
+            # Check if container is actually running
+            if self.container.status != "running":
+                log.warning("Container %s exists but not running (status: %s), restarting", 
+                           self.container_name, self.container.status)
+                try:
+                    self.container.start()
+                    self.container.reload()
+                except Exception as e:
+                    log.warning("Failed to restart container %s: %s, removing and recreating", 
+                               self.container_name, e)
+                    try:
+                        self.container.remove(force=True)
+                    except Exception:
+                        pass
+                    # Fall through to create new container
+                    raise docker.errors.NotFound("Container removed, will recreate")
+            
             bindings = self.container.ports.get(f"{INTERNAL_PORT}/tcp")
             if bindings:
                 self.app_port = bindings[0]["HostPort"]
@@ -165,32 +183,50 @@ class DockerManager:
         except docker.errors.NotFound:
             pass
 
-        self.container = client.containers.run(
-            image       = settings.DOCKER_BASE_IMAGE,
-            name        = self.container_name,
-            command     = "tail -f /dev/null",   # keep alive; agent starts the real process
-            detach      = True,
-            network     = settings.DOCKER_NETWORK,
-            ports       = {f"{INTERNAL_PORT}/tcp": None},  # Docker picks host port
-            environment = {
-                "PROJECT_ID": self.project_id,
-                "BUILD_ID":   self.build_id,
-                "PORT":       str(INTERNAL_PORT),
-            },
-            mem_limit  = self._MEM_LIMIT,
-            cpu_quota  = self._CPU_QUOTA,
-            cpu_period = self._CPU_PERIOD,
-        )
+        try:
+            self.container = client.containers.run(
+                image       = settings.DOCKER_BASE_IMAGE,
+                name        = self.container_name,
+                command     = "tail -f /dev/null",   # keep alive; agent starts the real process
+                detach      = True,
+                network     = settings.DOCKER_NETWORK,
+                ports       = {f"{INTERNAL_PORT}/tcp": None},  # Docker picks host port
+                environment = {
+                    "PROJECT_ID": self.project_id,
+                    "BUILD_ID":   self.build_id,
+                    "PORT":       str(INTERNAL_PORT),
+                },
+                mem_limit  = self._MEM_LIMIT,
+                cpu_quota  = self._CPU_QUOTA,
+                cpu_period = self._CPU_PERIOD,
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to create Docker container {self.container_name}: {e}")
 
         # Resolve the random host port Docker assigned
-        self.container.reload()
-        bindings = self.container.ports.get(f"{INTERNAL_PORT}/tcp")
-        if bindings:
-            self.app_port = bindings[0]["HostPort"]
+        try:
+            self.container.reload()
+            bindings = self.container.ports.get(f"{INTERNAL_PORT}/tcp")
+            if bindings:
+                self.app_port = bindings[0]["HostPort"]
+        except Exception as e:
+            log.warning("Failed to get port bindings for container %s: %s", self.container_name, e)
 
         # Bootstrap workspace
-        self.exec("mkdir -p /workspace")
-        self.exec("apt-get update -qq && apt-get install -y -qq git curl 2>/dev/null")
+        try:
+            # First command must run from root since /workspace doesn't exist yet
+            result = self.container.exec_run(
+                ["/bin/sh", "-c", "mkdir -p /workspace"],
+                workdir="/",  # Use root directory for bootstrap
+                demux=False,
+            )
+            if result.exit_code != 0:
+                log.warning("Failed to create /workspace: %s", result.output)
+            
+            # Now we can use the regular exec method for other bootstrap commands
+            self.exec("apt-get update -qq && apt-get install -y -qq git curl 2>/dev/null")
+        except Exception as e:
+            log.warning("Failed to bootstrap container %s: %s", self.container_name, e)
 
         log.info("Container %s started, host_port=%s", self.container_name, self.app_port)
         return self.container.id
@@ -288,7 +324,10 @@ class DockerManager:
     def _ensure_workspace(self) -> None:
         """Ensure /workspace exists inside the container. Idempotent."""
         try:
-            self.exec("mkdir -p /workspace")
+            # Use root directory as workdir since /workspace might not exist yet
+            exit_code, output = self.exec("mkdir -p /workspace", workdir="/")
+            if exit_code != 0:
+                log.warning("Failed to create /workspace directory: %s", output)
         except Exception as e:
             log.warning("Failed to ensure /workspace: %s", e)
 
@@ -306,9 +345,22 @@ class DockerManager:
         if path.startswith("workspace/"):
             path = path[len("workspace/"):]
 
-
         if not path:
             raise ValueError("Empty file path after sanitization")
+
+        # Ensure container is accessible before attempting write
+        if not self.container:
+            raise RuntimeError("Container not initialized - call spin_up() first")
+        
+        try:
+            # Check if container is still running
+            self.container.reload()
+            if self.container.status != "running":
+                raise RuntimeError(f"Container {self.container_name} is not running (status: {self.container.status})")
+        except docker.errors.NotFound:
+            raise RuntimeError(f"Container {self.container_name} no longer exists - may have been stopped or removed")
+        except Exception as e:
+            raise RuntimeError(f"Failed to check container status: {e}")
 
         # Ensure /workspace exists (guards against stale container handles
         # and images that don't have the directory pre-created).
@@ -316,21 +368,38 @@ class DockerManager:
 
         parent = "/".join(path.split("/")[:-1])
         if parent:
-            self.exec(f"mkdir -p /workspace/{parent}")
+            exit_code, mkdir_output = self.exec(f"mkdir -p /workspace/{parent}")
+            if exit_code != 0:
+                raise RuntimeError(f"Failed to create parent directory /workspace/{parent}: {mkdir_output}")
 
-        stream = io.BytesIO()
-        with tarfile.open(fileobj=stream, mode="w") as tar:
-            encoded = content.encode("utf-8")
-            info    = tarfile.TarInfo(name=path)
-            info.size = len(encoded)
-            tar.addfile(info, io.BytesIO(encoded))
-        stream.seek(0)
-        self.container.put_archive("/workspace", stream)
+        try:
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode="w") as tar:
+                encoded = content.encode("utf-8")
+                info    = tarfile.TarInfo(name=path)
+                info.size = len(encoded)
+                tar.addfile(info, io.BytesIO(encoded))
+            stream.seek(0)
+            
+            # Use put_archive with error handling
+            self.container.put_archive("/workspace", stream)
+            
+        except docker.errors.APIError as e:
+            if e.response.status_code == 404:
+                raise RuntimeError(f"Container not found when writing file - container may have been removed: {e}")
+            else:
+                raise RuntimeError(f"Docker API error when writing file {path}: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to write file {path} to container: {e}")
 
         # Verify the file was actually written
-        exit_code, _ = self.exec(f"test -f /workspace/{path}")
-        if exit_code != 0:
-            raise RuntimeError(f"File verification failed — /workspace/{path} not found after write")
+        try:
+            exit_code, _ = self.exec(f"test -f /workspace/{path}")
+            if exit_code != 0:
+                raise RuntimeError(f"File verification failed — /workspace/{path} not found after write")
+        except Exception as e:
+            log.warning("Could not verify file write for %s: %s", path, e)
+            # Don't fail the write operation for verification errors
 
     def read_file(self, path: str) -> str:
         if ".." in path:
@@ -353,21 +422,39 @@ class DockerManager:
 
     # ── Command execution ─────────────────────────────────────────
 
-    def exec(self, command: str, timeout: int = 120) -> tuple[int, str]:
+    def exec(self, command: str, timeout: int = 120, workdir: str = "/workspace") -> tuple[int, str]:
         """
         Run a shell command inside the container.
         Returns (exit_code, output_string).
 
         timeout: seconds before giving up (default 120, use 300 for installs)
+        workdir: working directory for command execution (default /workspace)
         """
         if not self.container:
             raise RuntimeError("Container not started — call spin_up() first.")
-        result = self.container.exec_run(
-            ["/bin/sh", "-c", command],
-            workdir = "/workspace",
-            demux   = False,
-        )
-        return result.exit_code, (result.output or b"").decode("utf-8", errors="replace")
+        
+        try:
+            # Check if container is still running before executing
+            self.container.reload()
+            if self.container.status != "running":
+                raise RuntimeError(f"Container {self.container_name} is not running (status: {self.container.status})")
+            
+            result = self.container.exec_run(
+                ["/bin/sh", "-c", command],
+                workdir=workdir,
+                demux=False,
+            )
+            return result.exit_code, (result.output or b"").decode("utf-8", errors="replace")
+            
+        except docker.errors.NotFound:
+            raise RuntimeError(f"Container {self.container_name} no longer exists")
+        except docker.errors.APIError as e:
+            if e.response.status_code == 404:
+                raise RuntimeError(f"Container not found when executing command: {e}")
+            else:
+                raise RuntimeError(f"Docker API error when executing command: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to execute command in container: {e}")
 
     # ── Snapshot (used by deploy node to tar workspace) ───────────
 

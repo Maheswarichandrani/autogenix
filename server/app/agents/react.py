@@ -35,7 +35,7 @@ from app.core.llm import get_llm, LLMProvider
 
 log = logging.getLogger(__name__)
 
-DEFAULT_MAX_ITER = 12
+DEFAULT_MAX_ITER = 20
 
 
 # ── Dynamic step messages ─────────────────────────────────────────
