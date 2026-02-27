@@ -128,11 +128,29 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     const optimistic = current.filter((m) => m.id.startsWith("temp-"));
     const serverIds  = new Set(serverMessages.map((m) => m.id));
     const pending    = optimistic.filter((m) => !serverIds.has(m.id));
-    set({ messages: [...serverMessages, ...pending] });
+    
+    // Merge and sort by created_at to maintain chronological order
+    const merged = [...serverMessages, ...pending];
+    merged.sort((a, b) => {
+      const timeA = new Date(a.created_at).getTime();
+      const timeB = new Date(b.created_at).getTime();
+      return timeA - timeB;
+    });
+    
+    set({ messages: merged });
   },
 
   addOptimisticMessage: (message: Message) => {
-    set((s) => ({ messages: [...s.messages, message] }));
+    set((s) => {
+      const updatedMessages = [...s.messages, message];
+      // Sort by created_at to maintain chronological order
+      updatedMessages.sort((a, b) => {
+        const timeA = new Date(a.created_at).getTime();
+        const timeB = new Date(b.created_at).getTime();
+        return timeA - timeB;
+      });
+      return { messages: updatedMessages };
+    });
   },
 
   confirmOptimisticMessage: (tempId: string, realId: string) => {
@@ -322,8 +340,17 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         const ip = get().inProgressMessage;
         set((s) => {
           const committed = ip ? commitInProgress(ip) : null;
+          const updatedMessages = committed ? [...s.messages, committed] : s.messages;
+          
+          // Sort by created_at to maintain chronological order
+          updatedMessages.sort((a, b) => {
+            const timeA = new Date(a.created_at).getTime();
+            const timeB = new Date(b.created_at).getTime();
+            return timeA - timeB;
+          });
+          
           return {
-            messages:          committed ? [...s.messages, committed] : s.messages,
+            messages:          updatedMessages,
             inProgressMessage: null,
             is_streaming:      false,
             isThinking:        false,
@@ -358,6 +385,15 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         set((s) => {
           const ip        = s.inProgressMessage;
           const committed = ip ? commitInProgress(ip) : null;
+          const updatedMessages = committed ? [...s.messages, committed] : s.messages;
+          
+          // Sort by created_at to maintain chronological order
+          updatedMessages.sort((a, b) => {
+            const timeA = new Date(a.created_at).getTime();
+            const timeB = new Date(b.created_at).getTime();
+            return timeA - timeB;
+          });
+          
           return {
             stage:             "error",
             error:             (event as { reason?: string }).reason ?? "Build failed",
@@ -366,7 +402,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
             thinkingStatus:    null,
             inProgressMessage: null,
             stepFeed:          [],
-            messages: committed ? [...s.messages, committed] : s.messages,
+            messages:          updatedMessages,
           };
         });
         break;

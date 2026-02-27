@@ -16,6 +16,17 @@ export function UserMessage({ message }: UserMessageProps) {
     .map((c) => c.content)
     .join(" ");
 
+  // Format time only (no date)
+  const formatTime = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+  };
+
   if (!textContent) return null;
 
   return (
@@ -31,7 +42,10 @@ export function UserMessage({ message }: UserMessageProps) {
       </div>
 
       {/* Message Content */}
-      <div className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-3 py-2">
+      <div 
+        className="bg-primary text-primary-foreground rounded-2xl rounded-tr-sm px-3 py-2 cursor-default"
+        title={formatTime(message.created_at)}
+      >
         <p className="text-sm leading-relaxed whitespace-pre-wrap wrap-break-word">
           {textContent}
         </p>

@@ -12,6 +12,17 @@ interface AssistantMessageProps {
 }
 
 export function AssistantMessage({ message }: AssistantMessageProps) {
+  // Format time only (no date)
+  const formatTime = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+  };
+
   return (
     <div className="py-2">
       {/* AI Avatar and Label at the top */}
@@ -34,7 +45,8 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
             return (
               <div
                 key={idx}
-                className="bg-muted/50 rounded-2xl rounded-tl-sm px-3 py-2"
+                className="bg-muted/50 rounded-2xl rounded-tl-sm px-3 py-2 cursor-default"
+                title={formatTime(message.created_at)}
               >
                 <MarkdownContent content={block.content} />
               </div>

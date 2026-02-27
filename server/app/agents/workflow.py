@@ -56,6 +56,20 @@ from typing import Annotated, Optional, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langgraph.checkpoint.postgres import PostgresSaver
 
+
+def _resettable_list_add(left: list, right: list | None) -> list:
+    """Custom LangGraph reducer that accumulates like operator.add but
+    can be RESET to [] when the right operand is None.
+
+    Usage in nodes:
+      return {"messages_to_save": [new_msg]}   # appends
+    Usage from update_state after persisting:
+      wf.update_state(config, {"messages_to_save": None})  # clears
+    """
+    if right is None:
+        return []
+    return left + right
+
 from app.core.redis import publish
 from app.core.config import settings
 from app.core.docker_manager import DockerManager, RunConfig
@@ -106,6 +120,7 @@ class GraphState(TypedDict, total=False):
     artifacts:              list
     messages_to_save:       Annotated[list, _list_add]
 
+
     # Results
     repo_url:               Optional[str]
     deploy_url:             Optional[str]
@@ -133,10 +148,12 @@ def _stream_text(project_id: str, text: str, role: str) -> None:
 
 
 def _msg(role: str, message_type: str, text: str) -> dict:
+    from datetime import datetime, timezone
     return {
         "role":         role,
         "message_type": message_type,
         "content":      [{"type": "text", "content": text}],
+        "created_at":   datetime.now(timezone.utc).isoformat(),
     }
 
 

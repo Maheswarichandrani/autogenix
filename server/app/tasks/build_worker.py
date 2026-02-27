@@ -155,7 +155,9 @@ def _save_state_to_db(db: Session, state: dict, project_id: str, build_id: str |
     - Replaces temp artifact IDs with real DB UUIDs inside message blocks.
     - Persists run_config to Build.metadata for cross-node reattach.
     - NEVER persists deploy_payload (contains plaintext credentials).
-    - Clears artifacts/messages_to_save from state to prevent double-save.
+    - After commit the caller MUST call wf.update_state(config, {"messages_to_save": None})
+      to reset the reducer in the LangGraph checkpoint so messages aren't re-saved
+      on the next invocation.
     """
     from app.models import Message, Artifact, Build
 
@@ -207,7 +209,8 @@ def _save_state_to_db(db: Session, state: dict, project_id: str, build_id: str |
 
     db.commit()
 
-    # Clear so next call doesn't re-save the same records
+    # Clear local dict copies — the actual checkpoint reset happens
+    # via wf.update_state(config, {"messages_to_save": None}) in the caller.
     state["artifacts"]        = []
     state["messages_to_save"] = []
     return state
@@ -348,6 +351,7 @@ def start_workflow_task(
             "deploy_payload":       None,
             "artifacts":            [],
             "messages_to_save":     [],
+            "_saved_msg_count":     0,
             "repo_url":             None,
             "deploy_url":           None,
             "error":                None,
@@ -361,6 +365,7 @@ def start_workflow_task(
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
+        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -397,6 +402,7 @@ def start_workflow_task(
                 "deploy_payload":       None,
                 "artifacts":            [],
                 "messages_to_save":     [],
+                "_saved_msg_count":     0,
                 "repo_url":             None,
                 "deploy_url":           None,
                 "error":                str(e),
@@ -487,6 +493,7 @@ def resume_workflow_task(
                 "deploy_payload":       None,
                 "artifacts":            [],
                 "messages_to_save":     [],
+                "_saved_msg_count":     0,
                 "repo_url":             None,
                 "deploy_url":           None,
                 "error":                None,
@@ -495,6 +502,7 @@ def resume_workflow_task(
             # Now run conductor with the user's new message
             state = _stream_until_interrupt_or_end(wf, config, db, project_id)
             _save_state_to_db(db, state, project_id, state.get("build_id"))
+            wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
 
             snap = wf.get_state(config)
             if not snap.next:
@@ -514,6 +522,7 @@ def resume_workflow_task(
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
+        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -546,6 +555,7 @@ def resume_workflow_task(
                 "deploy_payload":       None,
                 "artifacts":            [],
                 "messages_to_save":     [],
+                "_saved_msg_count":     0,
                 "repo_url":             None,
                 "deploy_url":           None,
                 "error":                str(e),
@@ -595,6 +605,7 @@ def railway_connect_task(self, project_id: str, thread_id: str) -> None:
 
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
         _save_state_to_db(db, state, project_id, state.get("build_id"))
+        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -713,6 +724,7 @@ def deploy_confirm_task(
         state["deploy_payload"] = None
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
+        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
 
         snap = wf.get_state(config)
         if not snap.next:
