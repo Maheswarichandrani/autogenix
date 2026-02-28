@@ -36,10 +36,10 @@ import { StepFeed } from "../step-feed";
 
 interface StreamingMessageProps {
   inProgressMessage: InProgressMessage;
-  isStreaming:       boolean;
-  isThinking:        boolean;
-  thinkingStatus:    string | null;
-  stepFeed:          StepFeedItem[];
+  isStreaming: boolean;
+  isThinking: boolean;
+  thinkingStatus: string | null;
+  stepFeed: StepFeedItem[];
 }
 
 export const StreamingMessage = memo(function StreamingMessage({
@@ -50,21 +50,11 @@ export const StreamingMessage = memo(function StreamingMessage({
   stepFeed,
 }: StreamingMessageProps) {
   const { role, text, artifact } = inProgressMessage;
-  const hasText     = text.trim().length > 0;
+  const hasText = text.trim().length > 0;
   const hasArtifact = artifact !== null;
-  const hasContent  = hasText || hasArtifact;
-  const hasSteps    = stepFeed.length > 0;
-  const isActive    = isStreaming || isThinking || hasSteps;
-
-  // PERFORMANCE: Only render text if it actually changed
-  const [lastRenderedText, setLastRenderedText] = React.useState("");
-  const shouldUpdateText = text !== lastRenderedText;
-  
-  React.useEffect(() => {
-    if (shouldUpdateText) {
-      setLastRenderedText(text);
-    }
-  }, [text, shouldUpdateText]);
+  const hasContent = hasText || hasArtifact;
+  const hasSteps = stepFeed.length > 0;
+  const isActive = isStreaming || isThinking || hasSteps;
 
   return (
     <div className="py-2 animate-in fade-in duration-200">
@@ -133,8 +123,8 @@ export const StreamingMessage = memo(function StreamingMessage({
 
             {hasText && (
               <div className="bg-muted/50 rounded-2xl rounded-tl-sm px-4 py-3">
-                <StreamingMarkdown 
-                  content={text} 
+                <StreamingMarkdown
+                  content={text}
                   isStreaming={isStreaming}
                 />
                 {/* Blinking cursor — only while chunks actively arriving */}

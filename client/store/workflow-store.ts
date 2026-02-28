@@ -28,7 +28,6 @@
 import { create } from "zustand";
 import type { WorkflowStage, Message, SSEEvent, StepFeedItem } from "@/types/workflow";
 import { useRightSidebar } from "@/store/right-sidebar-store";
-import { streamingDebug } from "@/lib/streaming-debug";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -52,6 +51,9 @@ interface WorkflowStore {
   is_streaming: boolean;
   error: string | null;
 
+  // ── Interim loading state (between message sent and workflow start)
+  isPendingWorkflowStart: boolean;
+
   // ── Thinking indicator (single pulsing status bar — replaces itself)
   isThinking: boolean;
   thinkingStatus: string | null;
@@ -67,6 +69,7 @@ interface WorkflowStore {
   addOptimisticMessage: (message: Message) => void;
   confirmOptimisticMessage: (tempId: string, realId: string) => void;
   removeOptimisticMessage: (tempId: string) => void;
+  setWorkflowPending: (pending: boolean) => void;
   handleSSEEvent: (event: SSEEvent) => void;
   reset: () => void;
 }
@@ -79,6 +82,7 @@ const INITIAL_STATE = {
   active_role: null as string | null,
   is_streaming: false,
   error: null as string | null,
+  isPendingWorkflowStart: false,
   isThinking: false,
   thinkingStatus: null as string | null,
   stepFeed: [] as StepFeedItem[],
@@ -163,6 +167,10 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
     set((s) => ({ messages: s.messages.filter((m) => m.id !== tempId) }));
   },
 
+  setWorkflowPending: (pending: boolean) => {
+    set({ isPendingWorkflowStart: pending });
+  },
+
   /**
    * STABLE function — reads state via get(), never closes over stale state.
    * Store in a useRef in the hook. Reference never changes.
@@ -176,10 +184,14 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
    *                  (this is what gives true streaming — no batching)
    */
   handleSSEEvent: (event: SSEEvent) => {
-    streamingDebug.sse(event, "RECEIVED");
-
     if (process.env.NODE_ENV === "development") {
       console.log("[WorkflowStore] SSE:", event.type, event);
+    }
+
+    // Clear pending state on any SSE event (workflow has started)
+    const currentState = get();
+    if (currentState.isPendingWorkflowStart) {
+      set({ isPendingWorkflowStart: false });
     }
 
     switch (event.type) {
@@ -277,21 +289,14 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         break;
       }
 
-      // ── Text chunk — ENHANCED STREAMING FIX ───────────────────
-      // Force immediate state update with minimal object changes
-      // to trigger React re-renders as fast as possible
+      // ── Text chunk — append to inProgressMessage.text ─────────
+      // The store updates immediately (flushSync in the SSE hook).
+      // The visual typewriter effect is handled by useTypewriter in
+      // StreamingMarkdown — it reveals chars at a natural pace.
       case "text_chunk":
-        streamingDebug.performance.startStreaming();
-
         set((s) => {
           const currentMessage = s.inProgressMessage;
           const newText = currentMessage ? currentMessage.text + event.chunk : event.chunk;
-
-          streamingDebug.store("TEXT_CHUNK", {
-            currentLength: currentMessage?.text?.length || 0,
-            chunkLength: event.chunk.length,
-            newLength: newText.length
-          });
 
           return {
             is_streaming: true,
@@ -366,18 +371,29 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
         break;
       }
 
-      // ── Close stream (entire workflow complete) ───────────────
+      // ── Close stream (task complete — SSE stays open) ─────────
+      // close_stream means the Celery task finished. The SSE connection
+      // is persistent, so we just reset transient UI state. If we're
+      // already idle (e.g. stale close_stream from a previous session),
+      // this is a harmless no-op.
       case "close_stream":
-        set((s) => ({
-          stage: (["thinking", "building", "testing", "fixing", "deploying"] as WorkflowStage[])
-            .includes(s.stage) && !["waiting_env", "complete", "error"].includes(s.stage)
-            ? "idle"
-            : s.stage,
-          is_streaming: false,
-          isThinking: false,
-          thinkingStatus: null,
-          stepFeed: [],
-        }));
+        set((s) => {
+          // Only reset if there's actually something to reset
+          const isActive = s.is_streaming || s.isThinking || s.stepFeed.length > 0;
+          if (!isActive) return s;   // no-op — already idle
+
+          return {
+            ...s,
+            stage: (["thinking", "building", "testing", "fixing", "deploying"] as WorkflowStage[])
+              .includes(s.stage) && !["waiting_env", "complete", "error"].includes(s.stage)
+              ? "idle"
+              : s.stage,
+            is_streaming: false,
+            isThinking: false,
+            thinkingStatus: null,
+            stepFeed: [],
+          };
+        });
         break;
 
       // ── Build failed ──────────────────────────────────────────

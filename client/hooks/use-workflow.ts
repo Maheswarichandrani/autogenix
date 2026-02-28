@@ -5,7 +5,7 @@
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * THE REAL STREAMING BUG — React 18 automatic batching
- * ─────────────────────────────────────────────────────────────────────────────
+ * ───────────────────────────── ────────────────────────────────────────────────
  *
  *   React 18 introduced automatic batching for ALL state updates, including
  *   those triggered from native event handlers like EventSource.onmessage.
@@ -46,7 +46,6 @@ import { flushSync } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useWorkflowStore } from "@/store/workflow-store";
 import { messagesAPI } from "@/lib/api/messages";
-import { streamingDebug } from "@/lib/streaming-debug";
 import type { UserAction, Message, SSEEvent, WorkflowStage } from "@/types/workflow";
 
 export const workflowKeys = {
@@ -68,37 +67,39 @@ export function useWorkflow(projectId: string) {
   const queryClient = useQueryClient();
 
   // ── Store actions ──────────────────────────────────────────────────────────
-  const hydrateMessages          = useWorkflowStore((s) => s.hydrateMessages);
-  const addOptimisticMessage     = useWorkflowStore((s) => s.addOptimisticMessage);
+  const hydrateMessages = useWorkflowStore((s) => s.hydrateMessages);
+  const addOptimisticMessage = useWorkflowStore((s) => s.addOptimisticMessage);
   const confirmOptimisticMessage = useWorkflowStore((s) => s.confirmOptimisticMessage);
-  const removeOptimisticMessage  = useWorkflowStore((s) => s.removeOptimisticMessage);
-  const reset                    = useWorkflowStore((s) => s.reset);
+  const removeOptimisticMessage = useWorkflowStore((s) => s.removeOptimisticMessage);
+  const setWorkflowPending = useWorkflowStore((s) => s.setWorkflowPending);
+  const reset = useWorkflowStore((s) => s.reset);
 
   // ── Rendered state (optimized selectors for performance) ───────────────────
-  const messages          = useWorkflowStore((s) => s.messages);
-  const stage             = useWorkflowStore((s) => s.stage);
-  const active_role       = useWorkflowStore((s) => s.active_role);
-  const is_streaming      = useWorkflowStore((s) => s.is_streaming);
-  const isThinking        = useWorkflowStore((s) => s.isThinking);
-  const thinkingStatus    = useWorkflowStore((s) => s.thinkingStatus);
-  const stepFeed          = useWorkflowStore((s) => s.stepFeed);
-  const error             = useWorkflowStore((s) => s.error);
-  
+  const messages = useWorkflowStore((s) => s.messages);
+  const stage = useWorkflowStore((s) => s.stage);
+  const active_role = useWorkflowStore((s) => s.active_role);
+  const is_streaming = useWorkflowStore((s) => s.is_streaming);
+  const isThinking = useWorkflowStore((s) => s.isThinking);
+  const thinkingStatus = useWorkflowStore((s) => s.thinkingStatus);
+  const stepFeed = useWorkflowStore((s) => s.stepFeed);
+  const error = useWorkflowStore((s) => s.error);
+  const isPendingWorkflowStart = useWorkflowStore((s) => s.isPendingWorkflowStart);
+
   // CRITICAL: Separate selector for streaming text to maximize performance
   const inProgressMessage = useWorkflowStore((s) => s.inProgressMessage);
 
   // ── Initial history load (TQ used only here) ───────────────────────────────
   const { isLoading: isLoadingHistory, isError: isHistoryError } = useQuery({
-    queryKey:             workflowKeys.messages(projectId),
-    queryFn:              async () => {
+    queryKey: workflowKeys.messages(projectId),
+    queryFn: async () => {
       const response = await messagesAPI.list(projectId, 0, 50);
       if (response.error) throw new Error(response.error);
       return response.data!;
     },
-    enabled:              !!projectId && projectId !== "undefined",
-    staleTime:            30_000,
+    enabled: !!projectId && projectId !== "undefined",
+    staleTime: 30_000,
     refetchOnWindowFocus: false,
-    refetchOnMount:       "always",
+    refetchOnMount: "always",
   });
 
   // Seed Zustand once when TQ gets fresh history
@@ -119,23 +120,23 @@ export function useWorkflow(projectId: string) {
     if (!activeBuild) return;
 
     const statusToStage: Record<string, WorkflowStage> = {
-      building:    "building",
-      running:     "building",
-      thinking:    "thinking",
-      testing:     "testing",
-      fixing:      "fixing",
-      deploying:   "deploying",
+      building: "building",
+      running: "building",
+      thinking: "thinking",
+      testing: "testing",
+      fixing: "fixing",
+      deploying: "deploying",
       waiting_env: "waiting_env",
     };
 
     const restored = statusToStage[activeBuild.status];
     if (restored) useWorkflowStore.setState({ stage: restored });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [historyData?.active_build?.status]);
 
   // ── SSE connection ─────────────────────────────────────────────────────────
   const eventSourceRef = useRef<EventSource | null>(null);
-  const retryRef       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const connectSSE = useCallback(() => {
     if (!projectId || projectId === "undefined") return;
@@ -175,27 +176,18 @@ export function useWorkflow(projectId: string) {
       const handle = useWorkflowStore.getState().handleSSEEvent;
 
       if (FLUSH_EVENT_TYPES.has(sseEvent.type)) {
-        // ── CRITICAL STREAMING FIX ─────────────────────────────────────────
+        // ── STREAMING FIX ───────────────────────────────────────────────
         // flushSync forces React to commit this state update synchronously,
-        // bypassing automatic batching. Each streaming event renders its own
-        // frame — giving the real word-by-word typewriter effect.
+        // bypassing automatic batching. The store is updated immediately so
+        // the useTypewriter hook's targetRef always has fresh text.
         //
-        // ENHANCED: Use requestAnimationFrame to ensure DOM updates are painted
-        // immediately, especially for rapid text_chunk events.
-        streamingDebug.sse(sseEvent, "FLUSH_SYNC");
-        
+        // The actual visual typewriter effect is handled by useTypewriter
+        // in StreamingMarkdown — it reveals characters at a natural pace
+        // using requestAnimationFrame, decoupled from SSE arrival timing.
         flushSync(() => {
           handle(sseEvent);
         });
-        
-        // Force immediate repaint for text chunks to ensure visual updates
-        if (sseEvent.type === "text_chunk") {
-          requestAnimationFrame(() => {
-            streamingDebug.sse(sseEvent, "REPAINT_COMPLETE");
-          });
-        }
       } else {
-        streamingDebug.sse(sseEvent, "NORMAL_UPDATE");
         handle(sseEvent);
       }
     };
@@ -212,14 +204,10 @@ export function useWorkflow(projectId: string) {
       console.warn("[SSE] Connection error — retrying in 3s");
       es.close();
 
-      const { stage: currentStage, is_streaming: cur } = useWorkflowStore.getState();
-      const shouldRetry =
-        (currentStage !== "idle" && currentStage !== "complete" && currentStage !== "error") ||
-        cur;
-
-      if (shouldRetry) {
-        retryRef.current = setTimeout(() => connectSSE(), 3_000);
-      }
+      // Always retry — the SSE should stay open for the lifetime of the
+      // workspace page.  close_stream no longer kills the connection, so
+      // onerror only fires on real network failures worth retrying.
+      retryRef.current = setTimeout(() => connectSSE(), 3_000);
     };
 
     eventSourceRef.current = es;
@@ -261,11 +249,11 @@ export function useWorkflow(projectId: string) {
       if ("content" in action && action.content) {
         const tempId = `temp-${Date.now()}`;
         addOptimisticMessage({
-          id:           tempId,
-          role:         "user",
+          id: tempId,
+          role: "user",
           message_type: "user_prompt",
-          content:      [{ type: "text", content: action.content }],
-          created_at:   new Date().toISOString(),
+          content: [{ type: "text", content: action.content }],
+          created_at: new Date().toISOString(),
         });
         return { tempId };
       }
@@ -275,10 +263,13 @@ export function useWorkflow(projectId: string) {
       if (context?.tempId) {
         confirmOptimisticMessage(context.tempId, response.user_message_id);
       }
+      // Set pending state after successful send to show interim loading
+      setWorkflowPending(true);
     },
 
     onError: (err, _action, context) => {
       if (context?.tempId) removeOptimisticMessage(context.tempId);
+      setWorkflowPending(false); // Clear pending state on error
       useWorkflowStore.setState({
         stage: "error",
         error: err instanceof Error ? err.message : "Failed to send message",
@@ -299,6 +290,7 @@ export function useWorkflow(projectId: string) {
     isLoadingHistory,
     isHistoryError,
     isSending: sendMutation.isPending,
+    isPendingWorkflowStart,
     sendAction: (action: UserAction) => {
       ensureSSEConnected();
       sendMutation.mutate(action);

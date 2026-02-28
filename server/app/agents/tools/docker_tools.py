@@ -13,11 +13,15 @@ Design decision on start_app:
   with exec_command("pkill uvicorn && nohup uvicorn ...") if something fails.
 """
 import os
+import logging
 from langchain_core.tools import tool
 from app.core.docker_manager import DockerManager
+from app.core.redis import publish_code
+
+log = logging.getLogger(__name__)
 
 
-def get_docker_tools(docker: DockerManager) -> list:
+def get_docker_tools(docker: DockerManager, project_id: str | None = None) -> list:
     """
     Returns tool functions bound to this build's DockerManager instance.
     Call once per build, pass returned list to run_react_agent().
@@ -60,6 +64,20 @@ def get_docker_tools(docker: DockerManager) -> list:
             docker.write_file(path, content)
             lines = len(content.splitlines())
             size  = len(content.encode("utf-8"))
+
+            # Publish file_created event to the code stream channel
+            if project_id:
+                try:
+                    publish_code(project_id, {
+                        "type":    "file_created",
+                        "path":    path,
+                        "content": content,
+                        "lines":   lines,
+                        "size":    size,
+                    })
+                except Exception as pub_err:
+                    log.warning("Failed to publish file_created for %s: %s", path, pub_err)
+
             return f"✅ Written: {path} ({lines} lines, {size} bytes)"
         except Exception as e:
             return f"❌ Failed to write {path}: {e}"
@@ -145,6 +163,16 @@ def get_docker_tools(docker: DockerManager) -> list:
         try:
             exit_code, output = docker.exec(f"rm -f /workspace/{path}")
             if exit_code == 0:
+                # Publish file_deleted event to the code stream channel
+                if project_id:
+                    try:
+                        publish_code(project_id, {
+                            "type": "file_deleted",
+                            "path": path,
+                        })
+                    except Exception as pub_err:
+                        log.warning("Failed to publish file_deleted for %s: %s", path, pub_err)
+
                 return f"✅ Deleted: {path}"
             return f"❌ Delete failed: {output}"
         except Exception as e:

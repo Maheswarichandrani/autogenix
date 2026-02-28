@@ -57,6 +57,34 @@ def _docker() -> docker.DockerClient:
     return _client
 
 
+def _ensure_network(network_name: str) -> docker.models.networks.Network:
+    """
+    Ensure the Docker network exists. Creates it if not found.
+    Idempotent: safe to call multiple times.
+    """
+    client = _docker()
+    try:
+        network = client.networks.get(network_name)
+        log.debug("Network %s already exists", network_name)
+        return network
+    except docker.errors.NotFound:
+        log.info("Creating Docker network: %s", network_name)
+        try:
+            network = client.networks.create(
+                name=network_name,
+                driver="bridge",
+                check_duplicate=True
+            )
+            log.info("Successfully created network: %s", network_name)
+            return network
+        except docker.errors.APIError as e:
+            # Another process might have created it between our check and create
+            if "already exists" in str(e).lower():
+                log.debug("Network %s was created by another process", network_name)
+                return client.networks.get(network_name)
+            raise
+
+
 # ── Stack defaults (fallback only — agent provides real commands) ──
 
 STACK_DEFAULTS: dict[str, dict] = {
@@ -148,6 +176,9 @@ class DockerManager:
         crash), reattaches to it instead of crashing with a name conflict.
         """
         client = _docker()
+        
+        # Ensure the network exists before creating container
+        _ensure_network(settings.DOCKER_NETWORK)
 
         # Idempotency: reattach if already running
         try:

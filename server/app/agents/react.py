@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Optional
 
 from langchain_core.tools import BaseTool
@@ -286,6 +287,9 @@ def run_react_agent(
                     "chunk": word + (" " if i < len(words) - 1 else ""),
                     "role":  role,
                 })
+                # Small delay prevents TCP coalescing — each event arrives
+                # as a separate SSE frame for the frontend typewriter.
+                time.sleep(0.015)
             break
 
     else:

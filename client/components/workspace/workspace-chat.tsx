@@ -15,20 +15,21 @@ import type { InProgressMessage } from "@/store/workflow-store";
 import type { StepFeedItem } from "@/types/workflow";
 
 interface WorkspaceChatProps {
-  projectId:         string;
-  messages:          Message[];
-  stage:             WorkflowStage;
-  inProgressMessage: InProgressMessage | null;
-  active_role:       string | null;
-  is_streaming:      boolean;
-  isThinking:        boolean;
-  thinkingStatus:    string | null;
-  stepFeed:          StepFeedItem[];
-  error:             string | null;
-  isLoadingHistory:  boolean;
-  isHistoryError:    boolean;
-  isSending:         boolean;
-  sendAction:        (action: UserAction) => void;
+  projectId:               string;
+  messages:                Message[];
+  stage:                   WorkflowStage;
+  inProgressMessage:       InProgressMessage | null;
+  active_role:             string | null;
+  is_streaming:            boolean;
+  isThinking:              boolean;
+  thinkingStatus:          string | null;
+  stepFeed:                StepFeedItem[];
+  error:                   string | null;
+  isLoadingHistory:        boolean;
+  isHistoryError:          boolean;
+  isSending:               boolean;
+  isPendingWorkflowStart?: boolean;
+  sendAction:              (action: UserAction) => void;
 }
 
 const WorkspaceChat = ({
@@ -43,13 +44,14 @@ const WorkspaceChat = ({
   error,
   isLoadingHistory,
   isSending,
+  isPendingWorkflowStart = false,
   sendAction,
 }: WorkspaceChatProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, inProgressMessage?.text, isThinking, stepFeed.length]);
+  }, [messages.length, inProgressMessage?.text, isThinking, isPendingWorkflowStart, stepFeed.length]);
 
   const handleSubmit = (content: string) => {
     if (!content.trim()) return;
@@ -61,9 +63,10 @@ const WorkspaceChat = ({
     messages.length === 0 &&
     !inProgressMessage &&
     !isThinking &&
+    !isPendingWorkflowStart &&
     stepFeed.length === 0;
 
-  const isBusy = isSending || is_streaming || isThinking ||
+  const isBusy = isSending || is_streaming || isThinking || isPendingWorkflowStart ||
     ["building", "testing", "fixing", "deploying"].includes(stage);
 
   return (
@@ -88,6 +91,19 @@ const WorkspaceChat = ({
           {messages.map((message) => (
             <ChatMessageItem key={message.id} message={message} />
           ))}
+
+          {/* Interim loading state - between message sent and workflow start */}
+          {isPendingWorkflowStart && !inProgressMessage && !isThinking && (
+            <div className="flex items-center gap-3 py-4 px-4 text-sm">
+              <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
+                <Bot className="size-4 text-primary" />
+              </div>
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="size-4 animate-spin shrink-0" />
+                <span className="animate-pulse">Preparing your request...</span>
+              </div>
+            </div>
+          )}
 
           {/* Live in-progress message with step feed */}
           {inProgressMessage ? (

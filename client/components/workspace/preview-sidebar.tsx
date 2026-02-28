@@ -1,309 +1,448 @@
 "use client";
-import { useState } from "react";
+
+import { useState, useCallback, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
-    ExternalLink,
-    RefreshCw,
-    Smartphone,
-    Monitor,
-    Tablet,
+    Code2,
+    Copy,
+    Download,
     Maximize2,
     Minimize2,
-    ChevronUp,
-    Loader2,
-    Globe,
     MoreVertical,
+    PanelLeftClose,
+    PanelLeft,
+    Terminal,
+    Settings,
+    GitBranch,
 } from "lucide-react";
+import { VscSplitHorizontal, VscSearch, VscSourceControl } from "react-icons/vsc";
 import { Button } from "@/components/ui/button";
 import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-
-type DeviceSize = "mobile" | "tablet" | "desktop";
+import {
+    FileNode,
+    EditorTab,
+    getLanguageFromFileName,
+} from "@/components/code-editor/types";
+import { FileExplorer } from "@/components/code-editor/file-explorer";
+import { MonacoEditorWrapper } from "@/components/code-editor/monaco-editor-wrapper";
+import { EditorTabs } from "@/components/code-editor/editor-tabs";
+import { samplePreviewFiles } from "@/components/code-editor/mock-data";
+import { useCodeStreamStore } from "@/store/code-stream-store";
 
 interface PreviewSidebarProps {
-    url?: string;
-    isLoading?: boolean;
+    files?: FileNode[];
     className?: string;
-    onRefresh?: () => void;
-    onOpenExternal?: () => void;
 }
 
-const deviceSizes: Record<DeviceSize, { width: string; icon: typeof Monitor }> =
-{
-    mobile: { width: "375px", icon: Smartphone },
-    tablet: { width: "768px", icon: Tablet },
-    desktop: { width: "100%", icon: Monitor },
-};
-
 export function PreviewSidebar({
-    url = "https://localhost:3000",
-    isLoading = false,
+    files,
     className,
-    onRefresh,
-    onOpenExternal,
 }: PreviewSidebarProps) {
-    const [device, setDevice] = useState<DeviceSize>("desktop");
-    const [isCollapsed, setIsCollapsed] = useState(false);
+    // ── Live code stream state ─────────────────────────────────────────────
+    const liveFileTree = useCodeStreamStore((s) => s.fileTree);
+    const liveOpenTabs = useCodeStreamStore((s) => s.openTabs);
+    const liveActiveTab = useCodeStreamStore((s) => s.activeTabId);
+    const liveFileCount = useCodeStreamStore((s) => s.fileCount);
+    const openFile = useCodeStreamStore((s) => s.openFile);
+    const closeTabStore = useCodeStreamStore((s) => s.closeTab);
+    const setActiveTab = useCodeStreamStore((s) => s.setActiveTab);
+
+    // Use live data if available, otherwise fall back to static/prop data
+    const hasLiveData = liveFileCount > 0;
+
+    // Local state for static fallback mode (when no live stream)
+    const [staticFileTree, setStaticFileTree] = useState<FileNode[]>(files ?? samplePreviewFiles);
+    const [staticOpenTabs, setStaticOpenTabs] = useState<EditorTab[]>([]);
+    const [staticActiveTabId, setStaticActiveTabId] = useState<string | null>(null);
+    const [staticSelectedFileId, setStaticSelectedFileId] = useState<string | null>(null);
+
+    // Resolve which data source to use
+    const fileTree = hasLiveData ? liveFileTree : staticFileTree;
+    const openTabs = hasLiveData ? liveOpenTabs : staticOpenTabs;
+    const activeTabId = hasLiveData ? liveActiveTab : staticActiveTabId;
+    const selectedFileId = hasLiveData ? liveActiveTab : staticSelectedFileId;
+
+    // UI state
+    const [isExplorerCollapsed, setIsExplorerCollapsed] = useState(false);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+
+    // Get current content for editor
+    const currentTab = useMemo(
+        () => openTabs.find((tab) => tab.id === activeTabId),
+        [openTabs, activeTabId]
+    );
+
+    // Find file content recursively
+    const findFile = (nodes: FileNode[], id: string): FileNode | null => {
+        for (const node of nodes) {
+            if (node.id === id) return node;
+            if (node.children) {
+                const found = findFile(node.children, id);
+                if (found) return found;
+            }
+        }
+        return null;
+    };
+
+    // Handle file selection
+    const handleFileSelect = useCallback(
+        (file: FileNode) => {
+            if (file.type !== "file") return;
+
+            if (hasLiveData) {
+                // In live mode, delegate to the store
+                openFile(file.id);
+                return;
+            }
+
+            // Static mode — manage local state
+            setStaticSelectedFileId(file.id);
+
+            const existingTab = staticOpenTabs.find((tab) => tab.id === file.id);
+
+            if (existingTab) {
+                setStaticActiveTabId(file.id);
+            } else {
+                const newTab: EditorTab = {
+                    id: file.id,
+                    name: file.name,
+                    content: file.content || "",
+                    language:
+                        file.language || getLanguageFromFileName(file.name),
+                    isDirty: false,
+                };
+
+                setStaticOpenTabs((prev) => [...prev, newTab]);
+                setStaticActiveTabId(file.id);
+            }
+        },
+        [hasLiveData, openFile, staticOpenTabs]
+    );
+
+    // Handle folder toggle
+    const handleToggleFolder = useCallback((folderId: string) => {
+        const toggleFolder = (nodes: FileNode[]): FileNode[] => {
+            return nodes.map((node) => {
+                if (node.id === folderId) {
+                    return { ...node, isExpanded: !node.isExpanded };
+                }
+                if (node.children) {
+                    return { ...node, children: toggleFolder(node.children) };
+                }
+                return node;
+            });
+        };
+
+        if (hasLiveData) {
+            // For live data, we toggle in a local override since the store
+            // rebuilds the tree on each event. This is a visual-only toggle.
+            // The tree is re-expanded on next file_created event anyway.
+            setStaticFileTree((prev) => toggleFolder(prev));
+        } else {
+            setStaticFileTree((prev) => toggleFolder(prev));
+        }
+    }, [hasLiveData]);
+
+    // Handle collapse all folders
+    const handleCollapseAll = useCallback(() => {
+        const collapseAll = (nodes: FileNode[]): FileNode[] => {
+            return nodes.map((node) => {
+                if (node.type === "folder") {
+                    return {
+                        ...node,
+                        isExpanded: false,
+                        children: node.children ? collapseAll(node.children) : undefined,
+                    };
+                }
+                return node;
+            });
+        };
+
+        setStaticFileTree((prev) => collapseAll(prev));
+    }, []);
+
+    // Handle tab selection
+    const handleTabSelect = useCallback((tabId: string) => {
+        if (hasLiveData) {
+            setActiveTab(tabId);
+        } else {
+            setStaticActiveTabId(tabId);
+            setStaticSelectedFileId(tabId);
+        }
+    }, [hasLiveData, setActiveTab]);
+
+    // Handle tab close
+    const handleTabClose = useCallback(
+        (tabId: string) => {
+            if (hasLiveData) {
+                closeTabStore(tabId);
+                return;
+            }
+
+            setStaticOpenTabs((prev) => {
+                const newTabs = prev.filter((tab) => tab.id !== tabId);
+
+                if (staticActiveTabId === tabId && newTabs.length > 0) {
+                    const closedIndex = prev.findIndex((tab) => tab.id === tabId);
+                    const newActiveIndex = Math.min(closedIndex, newTabs.length - 1);
+                    setStaticActiveTabId(newTabs[newActiveIndex].id);
+                    setStaticSelectedFileId(newTabs[newActiveIndex].id);
+                } else if (newTabs.length === 0) {
+                    setStaticActiveTabId(null);
+                    setStaticSelectedFileId(null);
+                }
+
+                return newTabs;
+            });
+        },
+        [hasLiveData, closeTabStore, staticActiveTabId]
+    );
+
+    // Copy code to clipboard
+    const handleCopyCode = useCallback(async () => {
+        if (currentTab?.content) {
+            await navigator.clipboard.writeText(currentTab.content);
+        }
+    }, [currentTab]);
+
+    // Download file
+    const handleDownload = useCallback(() => {
+        if (currentTab) {
+            const blob = new Blob([currentTab.content], { type: "text/plain" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = currentTab.name;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    }, [currentTab]);
 
     return (
-        <div
-            className={cn(
-                "flex flex-col h-full bg-card/30 border-l border-border",
-                className
-            )}
-        >
-            {/* Preview header */}
-            <div className="flex items-center justify-between h-12 px-3 border-b border-border bg-muted/30">
-                <div className="flex items-center gap-2">
-                    {isLoading ? (
-                        <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                    ) : (
-                        <Globe className="h-4 w-4 text-muted-foreground" />
-                    )}
-                    <span className="text-sm font-medium">
-                        {isLoading ? "Getting ready..." : "Live Preview"}
-                    </span>
-                </div>
+        <TooltipProvider>
+            <div
+                className={cn(
+                    "flex flex-col h-full bg-[#09090b] border-l border-border overflow-hidden",
+                    isFullscreen && "fixed inset-0 z-50",
+                    className
+                )}
+            >
+                {/* Header */}
+                <div className="flex items-center justify-between h-10 px-3 border-b border-border/50 bg-[#18181b]">
+                    <div className="flex items-center gap-2">
+                        <Code2 className="h-4 w-4 text-primary" />
+                        <span className="text-sm font-medium">Code Editor</span>
+                        {currentTab && (
+                            <span className="text-xs text-muted-foreground px-2 py-0.5 rounded bg-secondary/50">
+                                {currentTab.language}
+                            </span>
+                        )}
+                    </div>
 
-                <div className="flex items-center gap-1">
-                    {/* Device size toggles */}
-                    <div className="hidden sm:flex items-center gap-0.5 mr-2">
-                        {(Object.keys(deviceSizes) as DeviceSize[]).map((size) => {
-                            const Icon = deviceSizes[size].icon;
-                            return (
+                    <div className="flex items-center gap-1">
+                        {/* Activity bar icons */}
+                        <Tooltip>
+                            <TooltipTrigger asChild>
                                 <Button
-                                    key={size}
-                                    variant={device === size ? "secondary" : "ghost"}
+                                    variant="ghost"
                                     size="icon"
                                     className="h-7 w-7"
-                                    onClick={() => setDevice(size)}
+                                    onClick={() => setIsExplorerCollapsed(!isExplorerCollapsed)}
                                 >
-                                    <Icon className="h-3.5 w-3.5" />
+                                    {isExplorerCollapsed ? (
+                                        <PanelLeft className="h-3.5 w-3.5" />
+                                    ) : (
+                                        <PanelLeftClose className="h-3.5 w-3.5" />
+                                    )}
                                 </Button>
-                            );
-                        })}
+                            </TooltipTrigger>
+                            <TooltipContent>
+                                {isExplorerCollapsed ? "Show Explorer" : "Hide Explorer"}
+                            </TooltipContent>
+                        </Tooltip>
+                        <div className="w-px h-4 bg-border mx-1" />
+
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    onClick={handleCopyCode}
+                                    disabled={!currentTab}
+                                >
+                                    <Copy className="h-3.5 w-3.5" />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Copy Code</TooltipContent>
+                        </Tooltip>
+
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7"
+                                    onClick={handleDownload}
+                                    disabled={!currentTab}
+                                >
+                                    <Download className="h-3.5 w-3.5" />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Download File</TooltipContent>
+                        </Tooltip>
+
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="icon" className="h-7 w-7">
+                                    <MoreVertical className="h-3.5 w-3.5" />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-48">
+                                <DropdownMenuItem onClick={() => setIsFullscreen(!isFullscreen)}>
+                                    {isFullscreen ? (
+                                        <>
+                                            <Minimize2 className="h-4 w-4 mr-2" />
+                                            Exit Fullscreen
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Maximize2 className="h-4 w-4 mr-2" />
+                                            Fullscreen
+                                        </>
+                                    )}
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
                     </div>
-
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={onRefresh}
-                    >
-                        <RefreshCw
-                            className={cn("h-3.5 w-3.5", isLoading && "animate-spin")}
-                        />
-                    </Button>
-
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={onOpenExternal}
-                    >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                    </Button>
-
-                    <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-7 w-7">
-                                <MoreVertical className="h-3.5 w-3.5" />
-                            </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => setIsCollapsed(!isCollapsed)}>
-                                {isCollapsed ? (
-                                    <>
-                                        <Maximize2 className="h-4 w-4 mr-2" />
-                                        Expand Preview
-                                    </>
-                                ) : (
-                                    <>
-                                        <Minimize2 className="h-4 w-4 mr-2" />
-                                        Minimize Preview
-                                    </>
-                                )}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem>
-                                <RefreshCw className="h-4 w-4 mr-2" />
-                                Force Refresh
-                            </DropdownMenuItem>
-                        </DropdownMenuContent>
-                    </DropdownMenu>
                 </div>
-            </div>
 
-            {/* Preview content */}
-            {!isCollapsed && (
-                <div className="flex-1 overflow-hidden bg-background/50 p-4">
-                    <div
-                        className={cn(
-                            "h-full mx-auto bg-card border border-border rounded-xl overflow-hidden shadow-2xl transition-all duration-300",
-                            device === "mobile" && "max-w-[375px]",
-                            device === "tablet" && "max-w-[768px]"
+                {/* Main content area */}
+                <div className="flex-1 flex overflow-hidden">
+                    {/* File Explorer */}
+                    <AnimatePresence>
+                        {!isExplorerCollapsed && (
+                            <motion.div
+                                initial={{ width: 0, opacity: 0 }}
+                                animate={{ width: 220, opacity: 1 }}
+                                exit={{ width: 0, opacity: 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="shrink-0 overflow-hidden"
+                            >
+                                <FileExplorer
+                                    files={fileTree}
+                                    selectedFileId={selectedFileId}
+                                    onFileSelect={handleFileSelect}
+                                    onToggleFolder={handleToggleFolder}
+                                    onCollapseAll={handleCollapseAll}
+                                />
+                            </motion.div>
                         )}
-                    >
-                        {/* Browser chrome mockup */}
-                        <div className="flex items-center gap-2 px-3 py-2 bg-muted/50 border-b border-border">
-                            {/* Traffic lights */}
-                            <div className="flex items-center gap-1.5">
-                                <div className="w-3 h-3 rounded-full bg-red-500/80" />
-                                <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
-                                <div className="w-3 h-3 rounded-full bg-green-500/80" />
-                            </div>
+                    </AnimatePresence>
 
-                            {/* URL bar */}
-                            <div className="flex-1 flex items-center gap-2 px-3 py-1 bg-background rounded-md text-xs text-muted-foreground">
-                                <Globe className="h-3 w-3" />
-                                <span className="truncate">{url}</span>
-                            </div>
-                        </div>
+                    {/* Editor area */}
+                    <div className="flex-1 flex flex-col min-w-0 bg-[#09090b]">
+                        {/* Editor tabs */}
+                        <EditorTabs
+                            tabs={openTabs}
+                            activeTabId={activeTabId}
+                            onTabSelect={handleTabSelect}
+                            onTabClose={handleTabClose}
+                        />
 
-                        {/* Preview iframe/content area */}
-                        <div className="h-[calc(100%-36px)] overflow-auto bg-card">
-                            {isLoading ? (
-                                <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
-                                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                                    <span className="text-sm">Building preview...</span>
-                                </div>
+                        {/* Monaco Editor */}
+                        <div className="flex-1 relative">
+                            {currentTab ? (
+                                <MonacoEditorWrapper
+                                    content={currentTab.content}
+                                    language={currentTab.language}
+                                    fileName={currentTab.name}
+                                    readOnly={true}
+                                />
                             ) : (
-                                <PreviewContent device={device} />
+                                <EditorWelcomeScreen onFileSelect={() => {
+                                    // Select first file as demo
+                                    const firstFile = findFile(fileTree, "main-ts");
+                                    if (firstFile) handleFileSelect(firstFile);
+                                }} />
                             )}
                         </div>
+
+                        {/* Status bar */}
+                        <div className="h-6 px-3 flex items-center justify-between bg-[#18181b] border-t border-border/30 text-[10px] text-muted-foreground">
+                            <div className="flex items-center gap-3">
+                                <span className="flex items-center gap-1">
+                                    <GitBranch className="h-3 w-3" />
+                                    main
+                                </span>
+                                <span>UTF-8</span>
+                                {currentTab && (
+                                    <span className="uppercase">{currentTab.language}</span>
+                                )}
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <span>Ln 1, Col 1</span>
+                                <span>Spaces: 2</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            )}
-
-            {/* Collapsed state indicator */}
-            {isCollapsed && (
-                <div
-                    className="flex-1 flex flex-col items-center justify-center cursor-pointer hover:bg-muted/20 transition-colors"
-                    onClick={() => setIsCollapsed(false)}
-                >
-                    <ChevronUp className="h-6 w-6 text-muted-foreground mb-2" />
-                    <span className="text-sm text-muted-foreground">Expand Preview</span>
-                </div>
-            )}
-        </div>
+            </div>
+        </TooltipProvider>
     );
 }
 
-// Mock preview content
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function PreviewContent({ device: _device }: { device: DeviceSize }) {
+// Welcome screen when no file is open
+function EditorWelcomeScreen({ onFileSelect }: { onFileSelect: () => void }) {
     return (
-        <div className="p-4 space-y-4">
-            {/* Mock app sidebar */}
-            <div className="flex h-[400px] border border-border rounded-lg overflow-hidden">
-                {/* Sidebar */}
-                <div className="w-48 bg-muted/30 border-r border-border p-3 space-y-2 hidden sm:block">
-                    <div className="flex items-center gap-2 text-xs font-medium px-2 py-1.5 bg-primary/10 text-primary rounded">
-                        <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-                        Cloud
-                    </div>
-                    {["Overview", "Database", "Users", "Storage", "Edge Functions", "AI", "Secrets", "Logs"].map(
-                        (item) => (
-                            <div
-                                key={item}
-                                className="flex items-center gap-2 text-xs text-muted-foreground px-2 py-1.5 hover:bg-muted/50 rounded cursor-default"
-                            >
-                                <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30" />
-                                {item}
-                            </div>
-                        )
-                    )}
-                </div>
-
-                {/* Main content */}
-                <div className="flex-1 p-4 space-y-4">
-                    <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-semibold">Cloud</h3>
-                        <Button size="sm" variant="ghost" className="text-xs h-7">
-                            Close
-                        </Button>
-                    </div>
-
-                    {/* Users section */}
-                    <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs font-medium">Users</span>
-                            <span className="text-xs text-muted-foreground">0 Sign ups</span>
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                            View user data and configure how users sign up
-                        </div>
-                        <div className="flex gap-2">
-                            {["Auth settings"].map((btn) => (
-                                <div
-                                    key={btn}
-                                    className="px-2 py-1 text-[10px] bg-muted/50 rounded border border-border"
-                                >
-                                    {btn}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Storage section */}
-                    <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs font-medium">Storage</span>
-                            <span className="text-xs text-muted-foreground">3 Buckets</span>
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                            Store and manage files, images, and documents
-                        </div>
-                        <div className="flex flex-col gap-1">
-                            {["avatars", "project-files", "attachments"].map((bucket) => (
-                                <div
-                                    key={bucket}
-                                    className="flex items-center gap-2 px-2 py-1 text-[10px] text-muted-foreground"
-                                >
-                                    <div className="w-1.5 h-1.5 rounded-full bg-muted-foreground/30" />
-                                    {bucket}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-
-                    {/* Edge Functions section */}
-                    <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs font-medium">Edge Functions</span>
-                            <span className="text-xs text-muted-foreground">4 Functions</span>
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                            Configure functions executed in your app
-                        </div>
-                        <div className="flex flex-col gap-1">
-                            {["ai-task-suggestions", "generate-report", "send-notification"].map(
-                                (fn) => (
-                                    <div
-                                        key={fn}
-                                        className="flex items-center gap-2 px-2 py-1 text-[10px] text-muted-foreground"
-                                    >
-                                        <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                                        {fn}
-                                    </div>
-                                )
-                            )}
-                        </div>
+        <div className="flex flex-col items-center justify-center h-full bg-[#09090b] text-center px-6">
+            <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
+                className="space-y-6"
+            >
+                <div className="relative">
+                    <div className="absolute inset-0 rounded-full bg-primary/10 blur-2xl" />
+                    <div className="relative p-4 rounded-2xl bg-[#18181b] border border-border/50">
+                        <Code2 className="h-12 w-12 text-primary" strokeWidth={1.5} />
                     </div>
                 </div>
-            </div>
 
-            {/* Project title */}
-            <div className="space-y-1">
-                <h2 className="text-lg font-bold">Lovable Cloud</h2>
-                <p className="text-sm text-muted-foreground">
-                    Describe features, get full apps. Data, hosting, auth, AI included.
-                </p>
-            </div>
-ext-xs text-muted-foreground/60 mt-2">
+                <div className="space-y-2">
+                    <h3 className="text-lg font-semibold text-foreground">
+                        No File Open
+                    </h3>
+                    <p className="text-sm text-muted-foreground max-w-xs">
+                        Select a file from the explorer to view and edit its contents
+                    </p>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                    <Button
+                        variant="default"
+                        size="sm"
+                        className="glow-cyan"
+                        onClick={onFileSelect}
+                    >
+                        <Code2 className="h-4 w-4 mr-2" />
+                        Open a File
+                    </Button>
+
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground/60 mt-2">
                         <span>Tip: Use</span>
                         <kbd className="px-1.5 py-0.5 rounded bg-secondary/80 border border-border font-mono text-[10px]">
                             ⌘P

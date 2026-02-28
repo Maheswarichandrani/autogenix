@@ -137,6 +137,7 @@ def _thinking(project_id: str, msg: str, role: str = "system") -> None:
 
 
 def _stream_text(project_id: str, text: str, role: str) -> None:
+    import time
     publish(project_id, {"type": "agent_start", "role": role})
     words = text.split(" ")
     for i, word in enumerate(words):
@@ -145,6 +146,9 @@ def _stream_text(project_id: str, text: str, role: str) -> None:
             "chunk": word + (" " if i < len(words) - 1 else ""),
             "role":  role,
         })
+        # Small delay between words prevents TCP coalescing — each SSE event
+        # arrives as a separate frame so the frontend typewriter can animate.
+        time.sleep(0.015)
     publish(project_id, {"type": "agent_done", "role": role})
 
 
@@ -244,7 +248,7 @@ def conductor_node(state: GraphState) -> dict:
             messages.append(msg)
     messages.append({"role": "user", "content": user_message})
 
-    llm      = get_llm("claude-haiku-4-5")
+    llm      = get_llm("gpt-3.5-turbo")
     response = llm.chat_with_tools(messages, _CONDUCTOR_TOOLS, max_tokens=2048, temperature=0)
 
     if not response.tool_calls:
@@ -420,7 +424,7 @@ def artificer_node(state: GraphState) -> dict:
 
         # Edge case: Tools not available
         try:
-            tools = get_docker_tools(docker)
+            tools = get_docker_tools(docker, project_id)
             if not tools:
                 log.warning("No Docker tools available for project=%s", project_id)
         except Exception as tools_error:
@@ -439,7 +443,7 @@ def artificer_node(state: GraphState) -> dict:
                 user_prompt = f"Build this application:\n\n{build_description}",
                 tools       = tools,
                 max_iter    = 20,  # Increased from 5 to allow time for run_config generation
-                model       = "claude-haiku-4-5",
+                model       = "gpt-4o",
             )
         except Exception as agent_error:
             log.error("React agent failed for project=%s: %s", project_id, agent_error)
@@ -454,7 +458,7 @@ def artificer_node(state: GraphState) -> dict:
                     user_prompt = f"Build this simple application:\n\n{build_description}",
                     tools       = tools,
                     max_iter    = 5,  # Reduced for fallback
-                    model       = "claude-haiku-4-5",
+                    model       = "gpt-4o",
                 )
             except Exception as fallback_error:
                 error_msg = f"Agent execution failed: {agent_error}. Fallback also failed: {fallback_error}"
@@ -933,7 +937,7 @@ def guardian_node(state: GraphState) -> dict:
                     user_prompt = "Review the source code for security vulnerabilities since the application is not running.",
                     tools       = tools,
                     max_iter    = MAX_SECURITY_ITERATIONS,
-                    model       = "claude-sonnet-4-5",
+                    model       = "gpt-4o",
                 )
                 
                 publish(project_id, {"type": "agent_done", "role": "guardian"})
@@ -984,7 +988,7 @@ def guardian_node(state: GraphState) -> dict:
         user_prompt = f"Perform security testing on the application at {app_url}.",
         tools       = tools,
         max_iter    = 15,
-        model       = "claude-haiku-4-5",
+        model       = "gpt-4o",
     )
 
     publish(project_id, {"type": "agent_done", "role": "guardian"})
@@ -1129,7 +1133,7 @@ def artificer_fix_node(state: GraphState) -> dict:
         "<start_command>", start_command
     )
 
-    tools = get_docker_tools(docker)
+    tools = get_docker_tools(docker, project_id)
 
     publish(project_id, {"type": "agent_start", "role": "artificer"})
 
@@ -1140,7 +1144,7 @@ def artificer_fix_node(state: GraphState) -> dict:
         user_prompt = f"Fix these security issues:\n{issues_text}",
         tools       = tools,
         max_iter    = 12,
-        model       = "claude-haiku-4-5",
+        model       = "gpt-4o",
     )
 
     publish(project_id, {"type": "agent_done", "role": "artificer"})
@@ -1230,7 +1234,7 @@ def deployer_node(state: GraphState) -> dict:
         user_prompt = f"Deploy the application.\nEnvironment variables: {env_str}",
         tools       = tools,
         max_iter    = 15,
-        model       = "claude-haiku-4-5",
+        model       = "gpt-4o",
     )
 
     publish(project_id, {"type": "agent_done", "role": "deployer"})
@@ -1273,29 +1277,31 @@ def _make_checkpointer(db_url: str) -> PostgresSaver:
     """
     Create a PostgresSaver for use in a long-lived Celery worker process.
 
-    WHY NOT from_conn_string():
-      PostgresSaver.from_conn_string() is a @contextmanager. It returns a
-      _GeneratorContextManager, not a PostgresSaver. You must use it as:
-          with PostgresSaver.from_conn_string(url) as cp: ...
-      This is fine for short-lived FastAPI request handlers, but in Celery
-      workers the workflow graph is cached at module level (lives for hours).
-      Calling .__enter__() without .__exit__() leaves the connection open but
-      unmanaged — Python's GC eventually closes it, giving:
-          psycopg.OperationalError: the connection is closed
+    Uses psycopg_pool.ConnectionPool instead of a bare psycopg.Connection.
+    This solves the "the connection is closed" error that occurs when a
+    single connection goes stale after idle timeout / network blip.
 
-    THE FIX:
-      Create the psycopg connection directly with autocommit=True (required
-      by LangGraph) and pass it to PostgresSaver(). The connection lives as
-      long as the cached workflow graph. If it dies, _workflow() in
-      build_worker.py catches the error and recreates the graph.
+    The pool automatically:
+      - Tests connections before handing them out (pre-ping)
+      - Reconnects dead connections transparently
+      - Manages multiple concurrent checkpoint writes safely
 
-    autocommit=True is mandatory — LangGraph's PostgresSaver uses explicit
-    transaction management internally and breaks if the connection is in
-    autocommit=False mode.
+    autocommit=True (via connection kwargs) is mandatory — LangGraph's
+    PostgresSaver uses explicit transaction management internally.
     """
-    import psycopg
-    conn = psycopg.connect(db_url, autocommit=True)
-    checkpointer = PostgresSaver(conn)
+    from psycopg_pool import ConnectionPool
+
+    pool = ConnectionPool(
+        conninfo=db_url,
+        min_size=1,
+        max_size=5,
+        kwargs={"autocommit": True},
+        # Check connections are alive before handing them out
+        check=ConnectionPool.check_connection,
+    )
+    pool.wait()  # Block until min_size connections are ready
+
+    checkpointer = PostgresSaver(pool)
     checkpointer.setup()   # Creates LangGraph checkpoint tables if they don't exist
     return checkpointer
 

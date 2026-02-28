@@ -9,7 +9,9 @@ import { WorkspaceHeader } from "./workspace-header";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "../ui/resizable";
 import WorkspaceChat from "./workspace-chat";
 import { useWorkflow } from "@/hooks/use-workflow";
+import { useCodeStream } from "@/hooks/use-code-stream";
 import RightSidebar from "./right-sidebar";
+import { useRightSidebar } from "@/store/right-sidebar-store";
 
 interface WorkspaceClientProps {
   initialProject: Project;
@@ -29,16 +31,44 @@ const WorkspaceClient = ({ initialProject }: WorkspaceClientProps) => {
     isLoadingHistory,
     isHistoryError,
     isSending,
+    isPendingWorkflowStart,
     sendAction,
   } = useWorkflow(initialProject.id);
+
+  // Second SSE stream — code panel receives file events on a separate channel
+  const { fileCount, isConnected: isCodeConnected } = useCodeStream(initialProject.id);
+
+  const {
+    showCode,
+    showSettings,
+    setIdle,
+    hide
+  } = useRightSidebar();
+
+  const { currentState, isVisible } = useRightSidebar();
+
+  const handleTabChange = (tab: string) => {
+    switch (tab) {
+      case "code":
+        showCode();
+        break;
+      case "settings":
+        showSettings();
+        break;
+      case "idle":
+      default:
+        setIdle();
+        break;
+    }
+  };
 
   return (
     <>
       <WorkspaceHeader
         projectName={initialProject.name}
         isBuilding={["building", "thinking", "testing", "fixing"].includes(stage)}
-        activeTab="code"
-        onTabChange={() => {}}
+        activeTab={currentState}
+        onTabChange={handleTabChange}
         onDeploy={() => console.log("Deploy")}
         onShare={() => console.log("Share")}
       />
@@ -60,6 +90,7 @@ const WorkspaceClient = ({ initialProject }: WorkspaceClientProps) => {
               isLoadingHistory={isLoadingHistory}
               isHistoryError={isHistoryError}
               isSending={isSending}
+              isPendingWorkflowStart={isPendingWorkflowStart}
               sendAction={sendAction}
             />
           </ResizablePanel>

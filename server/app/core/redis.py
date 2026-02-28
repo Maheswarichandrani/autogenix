@@ -114,20 +114,37 @@ async def _get_async_client() -> aioredis.Redis:
     return aioredis.Redis(connection_pool=_get_async_pool())
 
 
-# ── Channel helper ────────────────────────────────────────────────
+# ── Channel helpers ───────────────────────────────────────────────
 
 def _channel(project_id: str) -> str:
+    """Workflow / chat events — consumed by the main SSE stream."""
     return f"project:{project_id}:stream"
+
+
+def _code_channel(project_id: str) -> str:
+    """File events (file_created, file_deleted) — consumed by the code panel SSE stream."""
+    return f"project:{project_id}:code"
 
 
 # ── Publish (called from Celery workers — sync) ───────────────────
 
 def publish(project_id: str, event: dict) -> None:
+    """Publish a workflow event to the main stream channel."""
     client  = _get_sync_client()
     payload = json.dumps(event)
     channel = _channel(project_id)
     client.publish(channel, payload)
     log.debug("[REDIS PUB] project=%s type=%s", project_id, event.get("type"))
+
+
+def publish_code(project_id: str, event: dict) -> None:
+    """Publish a file event to the code stream channel (sync, for Celery workers)."""
+    client  = _get_sync_client()
+    payload = json.dumps(event)
+    channel = _code_channel(project_id)
+    client.publish(channel, payload)
+    log.debug("[REDIS PUB CODE] project=%s type=%s path=%s",
+              project_id, event.get("type"), event.get("path"))
 
 
 # ── Subscribe & stream (called from FastAPI — async) ──────────────
@@ -171,9 +188,9 @@ async def subscribe_and_stream(project_id: str) -> AsyncGenerator[str, None]:
 
                 if event_type == CLOSE_STREAM_EVENT:
                     log.info("[REDIS SUB] project=%s close_stream received", project_id)
-                    # Yield the close event so frontend knows stream ended cleanly
-                    yield f"data: {raw}\n\n"
-                    break
+                    # Forward to the frontend so it can update UI state,
+                    # but do NOT break — the SSE connection stays open so
+                    # the next build's events flow through without reconnecting.
 
                 if event_type in TERMINAL_EVENTS:
                     log.info("[REDIS SUB] project=%s terminal event: %s", project_id, event_type)
@@ -200,3 +217,66 @@ async def subscribe_and_stream(project_id: str) -> AsyncGenerator[str, None]:
         except Exception:
             pass
         log.info("[REDIS SUB] project=%s connection closed", project_id)
+
+
+# ── Subscribe code stream (called from FastAPI — async) ───────────
+
+# Code channel terminal events — close the stream when the build ends
+CODE_TERMINAL_EVENTS = frozenset({"build_complete", "build_failed"})
+
+
+async def subscribe_code_stream(project_id: str) -> AsyncGenerator[str, None]:
+    """
+    Async generator for the code panel SSE endpoint.
+
+    Subscribes to project:{id}:code channel which receives file_created
+    and file_deleted events emitted by Artificer's docker tools during builds.
+
+    Same structure as subscribe_and_stream but on a separate channel so the
+    code panel has its own independent SSE connection.
+    """
+    client  = await _get_async_client()
+    channel = _code_channel(project_id)
+    pubsub  = client.pubsub()
+
+    try:
+        await pubsub.subscribe(channel)
+        log.info("[REDIS CODE SUB] project=%s subscribed", project_id)
+
+        async for message in pubsub.listen():
+            if message["type"] != "message":
+                continue
+
+            raw = message["data"]
+
+            try:
+                event = json.loads(raw)
+                event_type = event.get("type")
+
+                if event_type == CLOSE_STREAM_EVENT:
+                    log.info("[REDIS CODE SUB] project=%s close_stream received", project_id)
+                    # Forward but keep connection open (same as main stream)
+
+                if event_type in CODE_TERMINAL_EVENTS:
+                    log.info("[REDIS CODE SUB] project=%s terminal: %s", project_id, event_type)
+
+            except (json.JSONDecodeError, AttributeError):
+                pass
+
+            yield f"data: {raw}\n\n"
+
+    except asyncio.CancelledError:
+        log.info("[REDIS CODE SUB] project=%s client disconnected", project_id)
+
+    except Exception as e:
+        log.exception("[REDIS CODE SUB] Error streaming project=%s", project_id)
+        yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    finally:
+        try:
+            await pubsub.unsubscribe(channel)
+            await pubsub.aclose()
+            await client.aclose()
+        except Exception:
+            pass
+        log.info("[REDIS CODE SUB] project=%s connection closed", project_id)

@@ -50,7 +50,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
-from app.core.redis import subscribe_and_stream
+from app.core.redis import subscribe_and_stream, subscribe_code_stream
 from app.models.user import User
 from app.repositories.artifact_repo import ArtifactRepo
 from app.repositories.build_repo import BuildRepo
@@ -284,5 +284,35 @@ async def stream_messages(
     return EventSourceResponse(
         event_generator(),
         # sse-starlette sends a keep-alive ping every 15s automatically
+        ping=15,
+    )
+
+
+# ════════════════════════════════════════════════════════════════════
+# GET /messages/code-stream — SSE endpoint for code panel
+#
+# Separate SSE connection for file events (file_created, file_deleted).
+# The code panel subscribes to this instead of the main workflow stream.
+# This keeps the two panels decoupled: chat gets workflow events,
+# code editor gets file events — each on its own Redis channel.
+# ════════════════════════════════════════════════════════════════════
+
+@router.get("/messages/code-stream")
+async def stream_code_events(
+    project_id:   UUID,
+    current_user: User = Depends(get_current_user),
+    db:           AsyncSession = Depends(get_db),
+):
+    project = await ProjectRepo(db).get_by_id(project_id, current_user.id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    async def code_event_generator():
+        async for sse_frame in subscribe_code_stream(str(project_id)):
+            raw_json = sse_frame.removeprefix("data: ").rstrip("\n")
+            yield raw_json
+
+    return EventSourceResponse(
+        code_event_generator(),
         ping=15,
     )

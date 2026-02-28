@@ -3,10 +3,11 @@
 import { create } from "zustand";
 import { devtools } from "zustand/middleware";
 
-// Pipeline v2: Only code panel (no plan)
+// Pipeline v2: Code panel, Settings, and Idle state
 export type RightSidebarState = 
-  | "idle"           // Empty state
-  | "code";          // Code viewer (file tree + code)
+  | "idle"           // Empty state / ideal state
+  | "code"           // Code viewer (file tree + code)
+  | "settings";      // Settings panel
 
 // No complex payloads needed — code store manages its own state
 export type RightSidebarPayload = null;
@@ -18,6 +19,7 @@ export interface RightSidebarStore {
   isVisible: boolean;
   
   showCode: () => void;
+  showSettings: () => void;
   setIdle: () => void;
   hide: () => void;
   toggle: () => void;
@@ -43,6 +45,17 @@ export const useRightSidebar = create<RightSidebarStore>()(
           },
           false,
           "showCode"
+        ),
+
+      showSettings: () =>
+        set(
+          { 
+            currentState: "settings", 
+            payload: null, 
+            isVisible: true 
+          },
+          false,
+          "showSettings"
         ),
 
       setIdle: () =>
@@ -91,6 +104,7 @@ export const useRightSidebarVisible = () => useRightSidebar((state) => state.isV
 export const useRightSidebarActions = () => {
   const {
     showCode,
+    showSettings,
     setIdle,
     hide,
     toggle,
@@ -98,6 +112,7 @@ export const useRightSidebarActions = () => {
 
   return {
     showCode,
+    showSettings,
     setIdle,
     hide,
     toggle,

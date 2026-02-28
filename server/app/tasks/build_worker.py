@@ -101,11 +101,30 @@ _workflow_graph = None
 
 
 def _workflow():
+    """
+    Return the cached LangGraph workflow, recreating it if the
+    checkpointer's DB connection pool has become unusable.
+    """
     global _workflow_graph
+
+    if _workflow_graph is not None:
+        # Quick health-check: try reading a non-existent thread.
+        # If the pool is dead this will raise immediately.
+        try:
+            _workflow_graph.get_state(
+                {"configurable": {"thread_id": "__health_check__"}}
+            )
+        except Exception as exc:
+            log.warning(
+                "Cached workflow health-check failed (%s) — recreating", exc
+            )
+            _workflow_graph = None
+
     if _workflow_graph is None:
         from app.agents.workflow import create_workflow
         _workflow_graph = create_workflow(_fix_ssl(settings.DATABASE_URL))
         log.info("LangGraph workflow created and cached for worker process")
+
     return _workflow_graph
 
 
@@ -312,6 +331,13 @@ def _reset_graph_to_conductor(wf, config: dict, fresh_state: dict) -> None:
     )
 
 
+def _close_streams(project_id: str) -> None:
+    """Close BOTH the main workflow stream and the code panel stream."""
+    from app.core.redis import publish, publish_code
+    publish(project_id, {"type": "close_stream"})
+    publish_code(project_id, {"type": "close_stream"})
+
+
 # ═══════════════════════════════════════════════════════════════════
 # TASK 1 — START WORKFLOW
 # First user message. Seeds state, runs conductor once, then continues
@@ -373,12 +399,12 @@ def start_workflow_task(
         if not snap.next:
             _finalise_build(db, state)
             # Workflow completed - close SSE stream
-            publish(project_id, {"type": "close_stream"})
+            _close_streams(project_id)
 
     except Exception as e:
         log.exception("start_workflow_task failed project=%s", project_id)
         publish(project_id, {"type": "build_failed", "reason": str(e)})
-        publish(project_id, {"type": "close_stream"})
+        _close_streams(project_id)
 
         # ── Reset graph state to conductor so user isn't stuck ────
         # When a build fails mid-pipeline (e.g., at artificer or guardian),
@@ -509,7 +535,7 @@ def resume_workflow_task(
             snap = wf.get_state(config)
             if not snap.next:
                 _finalise_build(db, state)
-                publish(project_id, {"type": "close_stream"})
+                _close_streams(project_id)
             return
 
         # ── Normal flow: parked at conductor ──────────────────────
@@ -529,13 +555,13 @@ def resume_workflow_task(
         snap = wf.get_state(config)
         if not snap.next:
             _finalise_build(db, state)
-            # Workflow completed - close SSE stream
-        publish(project_id, {"type": "close_stream"})
+            # Workflow completed — close SSE stream
+            _close_streams(project_id)
 
     except Exception as e:
         log.exception("resume_workflow_task failed project=%s", project_id)
         publish(project_id, {"type": "build_failed", "reason": str(e)})
-        publish(project_id, {"type": "close_stream"})
+        _close_streams(project_id)
 
         # Reset graph so user isn't stuck after this failure too
         try:
@@ -586,7 +612,7 @@ def railway_connect_task(self, project_id: str, thread_id: str) -> None:
         snap = wf.get_state(config)
         if not snap or not snap.values:
             publish(project_id, {"type": "done", "status": "no_active_build"})
-            publish(project_id, {"type": "close_stream"})
+            _close_streams(project_id)
             return
 
         next_nodes = list(snap.next or [])
@@ -594,7 +620,7 @@ def railway_connect_task(self, project_id: str, thread_id: str) -> None:
         # Only relevant if deployer is the next node waiting
         if "deployer" not in next_nodes:
             publish(project_id, {"type": "done", "status": "key_saved_for_future"})
-            publish(project_id, {"type": "close_stream"})
+            _close_streams(project_id)
             return
 
         log.info("Resuming deployer after Railway connect project=%s", project_id)
@@ -612,12 +638,12 @@ def railway_connect_task(self, project_id: str, thread_id: str) -> None:
         snap = wf.get_state(config)
         if not snap.next:
             _finalise_build(db, state)
-            publish(project_id, {"type": "close_stream"})
+            _close_streams(project_id)
 
     except Exception as e:
         log.exception("railway_connect_task failed project=%s", project_id)
         publish(project_id, {"type": "build_failed", "reason": str(e)})
-        publish(project_id, {"type": "close_stream"})
+        _close_streams(project_id)
         raise self.retry(exc=e, countdown=30)
     finally:
         db.close()
@@ -689,7 +715,7 @@ def deploy_confirm_task(
                 "role":  "system",
             })
             publish(project_id, {"type": "done"})
-            publish(project_id, {"type": "close_stream"})
+            _close_streams(project_id)
             return
 
         if not user.railway_api_key_encrypted:
@@ -731,12 +757,12 @@ def deploy_confirm_task(
         snap = wf.get_state(config)
         if not snap.next:
             _finalise_build(db, state)
-            publish(project_id, {"type": "close_stream"})
+            _close_streams(project_id)
 
     except Exception as e:
         log.exception("deploy_confirm_task failed project=%s", project_id)
         publish(project_id, {"type": "build_failed", "reason": str(e)})
-        publish(project_id, {"type": "close_stream"})
+        _close_streams(project_id)
         raise self.retry(exc=e, countdown=30)
     finally:
         # Always wipe secrets from local scope
@@ -773,5 +799,5 @@ def _publish_connect_railway(project_id: str, build_id: str) -> None:
         }),
     })
     publish(project_id, {"type": "done"})
-    publish(project_id, {"type": "close_stream"})  # This workflow path ends here
+    _close_streams(project_id)  # This workflow path ends here
     log.info("Emitted connect_railway for project=%s build=%s", project_id, build_id)

@@ -1,10 +1,10 @@
 "use client";
 
-import React, { memo, useEffect } from "react";
+import React, { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { streamingDebug } from "@/lib/streaming-debug";
+import { useTypewriter } from "@/hooks/use-typewriter";
 
 interface StreamingMarkdownProps {
   content: string;
@@ -12,34 +12,40 @@ interface StreamingMarkdownProps {
 }
 
 /**
- * Optimized markdown component specifically for streaming text.
- * Uses simple text rendering during active streaming for maximum performance,
- * then switches to full markdown parsing when streaming completes.
+ * Optimized markdown component for streaming text.
+ *
+ * STREAMING FIX:
+ *   Uses the useTypewriter hook to progressively reveal text at a natural
+ *   reading pace. The store accumulates chunks instantly (flushSync), but
+ *   this component reveals characters frame-by-frame using rAF — giving
+ *   the true word-by-word typewriter effect.
+ *
+ *   During active streaming: simple text rendering (no markdown parsing)
+ *   for maximum animation performance.
+ *
+ *   When streaming ends: switches to full ReactMarkdown for rich formatting.
+ *   This matches ChatGPT/Copilot behaviour: raw text streams in, then
+ *   gets formatted when the response is complete.
  */
-export const StreamingMarkdown = memo(function StreamingMarkdown({ 
-  content, 
-  isStreaming = false 
+export const StreamingMarkdown = memo(function StreamingMarkdown({
+  content,
+  isStreaming = false
 }: StreamingMarkdownProps) {
-  // Debug logging
-  useEffect(() => {
-    streamingDebug.render("StreamingMarkdown", {
-      contentLength: content.length,
-      isStreaming,
-      renderMode: isStreaming && content.length < 200 ? "simple" : "full"
-    });
-  }, [content, isStreaming]);
+  // Progressive text reveal — the core streaming fix.
+  // charsPerFrame=3 ≈ 180 chars/sec at 60fps — natural reading speed.
+  const displayedText = useTypewriter(content, isStreaming, 3);
 
-  // During active streaming, use simple text rendering for maximum speed
-  // This ensures real-time updates without markdown parsing overhead
-  if (isStreaming && content.length < 200) {
+  // During active streaming: simple text for smooth 60fps animation.
+  // No markdown parsing overhead — just raw text with a blinking cursor.
+  if (isStreaming) {
     return (
       <div className="text-sm leading-snug whitespace-pre-wrap text-foreground">
-        {content}
+        {displayedText}
       </div>
     );
   }
 
-  // For completed or longer content, use full markdown rendering
+  // Completed content: full markdown rendering with syntax highlighting
   return (
     <div className="prose prose-xs dark:prose-invert max-w-none *:my-1 *:first:mt-0 *:last:mb-0">
       <ReactMarkdown

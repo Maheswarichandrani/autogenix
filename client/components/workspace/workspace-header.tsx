@@ -12,6 +12,8 @@ import {
     Activity,
     Bot,
     Eye,
+    Home,
+    LayoutDashboard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,7 +38,7 @@ interface WorkspaceHeaderProps {
 export function WorkspaceHeader({
     projectName = "Untitled Project",
     isBuilding = false,
-    activeTab = "preview",
+    activeTab = "ideal",
     onTabChange,
     onDeploy,
     onShare,
@@ -90,17 +92,17 @@ export function WorkspaceHeader({
             <div className="hidden md:flex">
                 <Tabs value={activeTab} onValueChange={onTabChange}>
                     <TabsList className="bg-muted/50 h-9">
+                        <TabsTrigger value="idle" className="gap-1.5 text-xs px-3">
+                            <LayoutDashboard className="h-3.5 w-3.5" />
+                            Overview
+                        </TabsTrigger>
                         <TabsTrigger value="code" className="gap-1.5 text-xs px-3">
                             <Code2 className="h-3.5 w-3.5" />
                             Code
                         </TabsTrigger>
-                        <TabsTrigger value="agents" className="gap-1.5 text-xs px-3">
-                            <Bot className="h-3.5 w-3.5" />
-                            Agents
-                        </TabsTrigger>
-                        <TabsTrigger value="activity" className="gap-1.5 text-xs px-3">
-                            <Activity className="h-3.5 w-3.5" />
-                            Activity
+                        <TabsTrigger value="settings" className="gap-1.5 text-xs px-3">
+                            <Settings className="h-3.5 w-3.5" />
+                            Settings
                         </TabsTrigger>
                     </TabsList>
                 </Tabs>
