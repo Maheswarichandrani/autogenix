@@ -18,12 +18,7 @@ class Build(Base):
     # planning|waiting_approval|approved|building|security_testing|fixing|deploying|completed|failed
     status: Mapped[str] = mapped_column(String, default="planning")
     
-    raw_plan: Mapped[dict] = mapped_column(JSONB, nullable=True)
     approved_plan: Mapped[dict] = mapped_column(JSONB, nullable=True)
-    
-    # Security iteration tracking
-    security_iteration: Mapped[int] = mapped_column(Integer, default=0)  # how many guardian↔artificer loops
-    security_issues_found: Mapped[list] = mapped_column(JSONB, nullable=True)
     
     # Outcome
     deploy_url: Mapped[str] = mapped_column(String, nullable=True)

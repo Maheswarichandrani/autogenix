@@ -54,6 +54,14 @@ interface WorkflowStore {
   // ── Interim loading state (between message sent and workflow start)
   isPendingWorkflowStart: boolean;
 
+  // ── Paused state (agent budget exhausted, waiting for user decision)
+  isPaused: boolean;
+  pauseReason: string | null;
+  pausedRole: string | null;
+  pausedModel: string | null;
+  pausedIteration: number;
+  pausedMaxIterations: number;
+
   // ── Thinking indicator (single pulsing status bar — replaces itself)
   isThinking: boolean;
   thinkingStatus: string | null;
@@ -83,6 +91,12 @@ const INITIAL_STATE = {
   is_streaming: false,
   error: null as string | null,
   isPendingWorkflowStart: false,
+  isPaused: false,
+  pauseReason: null as string | null,
+  pausedRole: null as string | null,
+  pausedModel: null as string | null,
+  pausedIteration: 0,
+  pausedMaxIterations: 0,
   isThinking: false,
   thinkingStatus: null as string | null,
   stepFeed: [] as StepFeedItem[],
@@ -433,6 +447,67 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
           thinkingStatus: null,
           inProgressMessage: null,
           stepFeed: [],
+        });
+        break;
+
+      // ── Agent paused (budget exhausted, waiting for user) ─────
+      case "agent_paused":
+        set({
+          isPaused: true,
+          pauseReason: event.reason,
+          pausedRole: event.role,
+          pausedIteration: event.iteration,
+          pausedMaxIterations: event.max_iterations,
+          isThinking: false,
+          thinkingStatus: null,
+          is_streaming: false,
+        });
+        break;
+
+      // ── Agent resumed (user chose continue or switch-model) ───
+      case "agent_resumed":
+        set({
+          isPaused: false,
+          pauseReason: null,
+          pausedRole: null,
+          pausedModel: event.model,
+          pausedIteration: 0,
+          pausedMaxIterations: 0,
+          isThinking: true,
+          thinkingStatus: `Resuming ${event.role} with ${event.budget} more iterations...`,
+          active_role: event.role,
+        });
+        break;
+
+      // ── Agent cancelled by user ───────────────────────────────
+      case "agent_cancelled":
+        set((s) => {
+          const ip = s.inProgressMessage;
+          const committed = ip ? commitInProgress(ip) : null;
+          const updatedMessages = committed ? [...s.messages, committed] : s.messages;
+          return {
+            isPaused: false,
+            pauseReason: null,
+            pausedRole: null,
+            pausedModel: null,
+            pausedIteration: 0,
+            pausedMaxIterations: 0,
+            is_streaming: false,
+            isThinking: false,
+            thinkingStatus: null,
+            inProgressMessage: null,
+            stepFeed: [],
+            messages: updatedMessages,
+          };
+        });
+        break;
+
+      // ── Model switched mid-execution ──────────────────────────
+      case "model_switched":
+        set({
+          pausedModel: event.new_model,
+          isThinking: true,
+          thinkingStatus: `Switched from ${event.old_model} to ${event.new_model}`,
         });
         break;
     }

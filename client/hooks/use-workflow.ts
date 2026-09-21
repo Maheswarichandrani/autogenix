@@ -61,6 +61,8 @@ const FLUSH_EVENT_TYPES = new Set([
   "tool_call",
   "tool_result",
   "thinking",
+  "agent_paused",
+  "agent_resumed",
 ]);
 
 export function useWorkflow(projectId: string) {
@@ -84,6 +86,13 @@ export function useWorkflow(projectId: string) {
   const stepFeed = useWorkflowStore((s) => s.stepFeed);
   const error = useWorkflowStore((s) => s.error);
   const isPendingWorkflowStart = useWorkflowStore((s) => s.isPendingWorkflowStart);
+
+  const isPaused = useWorkflowStore((s) => s.isPaused);
+  const pauseReason = useWorkflowStore((s) => s.pauseReason);
+  const pausedRole = useWorkflowStore((s) => s.pausedRole);
+  const pausedModel = useWorkflowStore((s) => s.pausedModel);
+  const pausedIteration = useWorkflowStore((s) => s.pausedIteration);
+  const pausedMaxIterations = useWorkflowStore((s) => s.pausedMaxIterations);
 
   // CRITICAL: Separate selector for streaming text to maximize performance
   const inProgressMessage = useWorkflowStore((s) => s.inProgressMessage);
@@ -246,6 +255,10 @@ export function useWorkflow(projectId: string) {
     },
 
     onMutate: async (action) => {
+      // Agent control actions don't create user messages
+      if (action.action === "agent_continue" || action.action === "agent_switch_model" || action.action === "agent_cancel") {
+        return {};
+      }
       if ("content" in action && action.content) {
         const tempId = `temp-${Date.now()}`;
         addOptimisticMessage({
@@ -291,6 +304,12 @@ export function useWorkflow(projectId: string) {
     isHistoryError,
     isSending: sendMutation.isPending,
     isPendingWorkflowStart,
+    isPaused,
+    pauseReason,
+    pausedRole,
+    pausedModel,
+    pausedIteration,
+    pausedMaxIterations,
     sendAction: (action: UserAction) => {
       ensureSSEConnected();
       sendMutation.mutate(action);

@@ -60,6 +60,12 @@ from app.schemas.enums import ACTION_TO_MESSAGE_TYPE, UserAction
 from app.schemas.message_schemas import SendMessageRequest
 from app.schemas.project_schemas import SendMessageResponse
 from app.tasks.build_worker import deploy_confirm_task, resume_workflow_task, start_workflow_task
+from app.agents.execution_registry import (
+    ControlSignal,
+    send_control_signal,
+    get_execution,
+    ExecutionStatus,
+)
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["messages"])
 log    = logging.getLogger(__name__)
@@ -179,6 +185,36 @@ async def send_message(
             "user_message_id": str(user_msg.id),
             "thread_id":       project.langgraph_thread_id,
             "status":          "deploying",
+            "stream_url":      f"/projects/{project_id}/messages/stream",
+        }
+
+    # ── agent_continue / agent_switch_model / agent_cancel ───────────────────
+    if body.action in (UserAction.AGENT_CONTINUE, UserAction.AGENT_SWITCH_MODEL, UserAction.AGENT_CANCEL):
+        action_map = {
+            UserAction.AGENT_CONTINUE:     "continue",
+            UserAction.AGENT_SWITCH_MODEL: "switch_model",
+            UserAction.AGENT_CANCEL:       "cancel",
+        }
+        signal_action = action_map[body.action]
+
+        if body.action == UserAction.AGENT_SWITCH_MODEL and not body.model:
+            raise HTTPException(
+                status_code=422,
+                detail="model is required for agent_switch_model action",
+            )
+
+        signal = ControlSignal(
+            action=signal_action,
+            model=body.model,
+            budget=body.budget or 20,
+        )
+
+        sent = send_control_signal(str(project_id), signal)
+
+        return {
+            "user_message_id": "",
+            "thread_id":       project.langgraph_thread_id or "",
+            "status":          f"agent_{signal_action}",
             "stream_url":      f"/projects/{project_id}/messages/stream",
         }
 

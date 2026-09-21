@@ -42,7 +42,12 @@ export type SSEEvent =
   | { type: "done";         deploy_url?: string; repo_url?: string; status?: string }
   | { type: "close_stream" }
   | { type: "build_failed"; reason: string }
-  | { type: "error";        message: string };
+  | { type: "error";        message: string }
+  // Agent lifecycle control events
+  | { type: "agent_paused";    role: string; iteration: number; max_iterations: number; reason: string }
+  | { type: "agent_resumed";   role: string; model: string; budget: number }
+  | { type: "agent_cancelled"; role: string; reason: string }
+  | { type: "model_switched";  role: string; old_model: string; new_model: string };
 
 // ─── Step feed item (built from step/tool_call/tool_result events) ────────────
 
@@ -91,7 +96,10 @@ export interface Message {
 
 export type UserAction =
   | { action: "send_message";     content: string }
-  | { action: "provide_env_vars"; vars: Record<string, string> };
+  | { action: "provide_env_vars"; vars: Record<string, string> }
+  | { action: "agent_continue";   budget?: number }
+  | { action: "agent_switch_model"; model: string; budget?: number }
+  | { action: "agent_cancel" };
 
 // ─── API response types ───────────────────────────────────────────────────────
 

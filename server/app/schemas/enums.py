@@ -26,10 +26,13 @@ class WorkflowStage(str, Enum):
 
 class UserAction(str, Enum):
     """
-    Only two user actions now.  The backend NEVER infers intent from text.
+    User actions the frontend can send to the backend.
     """
     SEND_MESSAGE     = "send_message"      # Regular chat / build request
     PROVIDE_ENV_VARS = "provide_env_vars"  # Deploy env vars form
+    AGENT_CONTINUE   = "agent_continue"    # Resume paused agent (same model)
+    AGENT_SWITCH_MODEL = "agent_switch_model"  # Resume with different model
+    AGENT_CANCEL     = "agent_cancel"      # Cancel paused/running agent
 
 
 class MessageType(str, Enum):

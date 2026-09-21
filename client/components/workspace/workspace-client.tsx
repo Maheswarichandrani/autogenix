@@ -32,6 +32,11 @@ const WorkspaceClient = ({ initialProject }: WorkspaceClientProps) => {
     isHistoryError,
     isSending,
     isPendingWorkflowStart,
+    isPaused,
+    pauseReason,
+    pausedRole,
+    pausedIteration,
+    pausedMaxIterations,
     sendAction,
   } = useWorkflow(initialProject.id);
 
@@ -91,6 +96,11 @@ const WorkspaceClient = ({ initialProject }: WorkspaceClientProps) => {
               isHistoryError={isHistoryError}
               isSending={isSending}
               isPendingWorkflowStart={isPendingWorkflowStart}
+              isPaused={isPaused}
+              pauseReason={pauseReason}
+              pausedRole={pausedRole}
+              pausedIteration={pausedIteration}
+              pausedMaxIterations={pausedMaxIterations}
               sendAction={sendAction}
             />
           </ResizablePanel>

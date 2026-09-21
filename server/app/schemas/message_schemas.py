@@ -46,12 +46,17 @@ class SendMessageRequest(BModel):
     """
     Schema for sending a user action.
 
-    Pipeline v2 — only two actions:
-      action              | content     | vars
-      ─────────────────────┼─────────────┼─────────────
-      send_message        | required    |
-      provide_env_vars    |             | required
+    Pipeline v2 actions:
+      action              | content     | vars          | model
+      ─────────────────────┼─────────────┼───────────────┼──────
+      send_message        | required    |               |
+      provide_env_vars    |             | required      |
+      agent_continue      |             |               |
+      agent_switch_model  |             |               | required
+      agent_cancel        |             |               |
     """
     action: UserAction
     content: Optional[str] = ""
-    vars: Optional[dict] = None  # Only for provide_env_vars action
+    vars: Optional[dict] = None      # Only for provide_env_vars action
+    model: Optional[str] = None      # Only for agent_switch_model action
+    budget: Optional[int] = None     # Optional iteration budget for continue/switch

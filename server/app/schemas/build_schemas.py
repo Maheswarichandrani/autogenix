@@ -9,7 +9,6 @@ class BuildSummaryResponse(BModel):
     id: UUID
     build_number: int
     status: str
-    security_iteration: int
     deploy_url: Optional[str] = None
     repo_url: Optional[str] = None
     error_message: Optional[str] = None
@@ -27,12 +26,7 @@ class BuildDetailResponse(BModel):
     status: str
 
     # Plans
-    raw_plan: Optional[dict] = None
     approved_plan: Optional[dict] = None
-
-    # Security
-    security_iteration: int
-    security_issues_found: Optional[list] = None
 
     # Outcome
     deploy_url: Optional[str] = None

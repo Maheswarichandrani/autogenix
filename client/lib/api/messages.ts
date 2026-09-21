@@ -41,9 +41,12 @@ export const messagesAPI = {
    * Send a user action to the workflow.
    * POST /api/v1/projects/:id/messages
    *
-   * Handles both actions in the unified endpoint:
-   *   { action: "send_message",    content: string }
-   *   { action: "provide_env_vars", vars: Record<string, string> }
+   * Handles all actions in the unified endpoint:
+   *   { action: "send_message",       content: string }
+   *   { action: "provide_env_vars",   vars: Record<string, string> }
+   *   { action: "agent_continue",     budget?: number }
+   *   { action: "agent_switch_model", model: string, budget?: number }
+   *   { action: "agent_cancel" }
    */
   sendAction: async (projectId: string, userAction: UserAction) => {
     const body: Record<string, unknown> = { action: userAction.action };
@@ -53,6 +56,12 @@ export const messagesAPI = {
     }
     if ("vars" in userAction && userAction.vars != null) {
       body.vars = userAction.vars;
+    }
+    if ("model" in userAction && userAction.model != null) {
+      body.model = userAction.model;
+    }
+    if ("budget" in userAction && userAction.budget != null) {
+      body.budget = userAction.budget;
     }
 
     return apiFetch<SendMessageResponse>(
