@@ -20,7 +20,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NexusAI",
+  title: "Autogenix",
   description: "Your AI-powered shipbuilding assistant",
 };
 

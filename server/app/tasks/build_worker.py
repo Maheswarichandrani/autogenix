@@ -50,7 +50,7 @@ log = logging.getLogger(__name__)
 
 # ── Celery app ────────────────────────────────────────────────────
 
-celery_app = Celery("aibuild", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
+celery_app = Celery("autogenix", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
 celery_app.conf.update(
     task_serializer            = "json",
     result_serializer          = "json",
@@ -251,8 +251,6 @@ def _finalise_build(db: Session, state: dict) -> None:
             build.status                = "failed" if state.get("error") else "completed"
             build.deploy_url            = deploy_url
             build.repo_url              = repo_url
-            build.security_iteration    = state.get("security_iteration", 0)
-            build.security_issues_found = state.get("all_security_issues", [])
             build.completed_at          = datetime.now(timezone.utc)
 
     project = db.get(Project if build_id else None.__class__, state.get("project_id"))

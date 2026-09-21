@@ -40,20 +40,20 @@ You need **THREE** services running simultaneously:
 
 ### 1️⃣ Redis (Message Broker)
 ```powershell
-cd E:\ALL-PROJECTS\NexusAI\server
+cd E:\ALL-PROJECTS\Autogenix\server
 docker-compose up -d redis
 ```
 
 ### 2️⃣ FastAPI Server (Terminal 1)
 ```powershell
-cd E:\ALL-PROJECTS\NexusAI\server
+cd E:\ALL-PROJECTS\Autogenix\server
 .\venv\Scripts\Activate.ps1
 python -m app.main
 ```
 
 ### 3️⃣ Celery Worker (Terminal 2) ← **THIS IS MISSING!**
 ```powershell
-cd E:\ALL-PROJECTS\NexusAI\server
+cd E:\ALL-PROJECTS\Autogenix\server
 .\start_celery.ps1
 ```
 
@@ -62,7 +62,7 @@ cd E:\ALL-PROJECTS\NexusAI\server
 I created a script that starts everything:
 
 ```powershell
-cd E:\ALL-PROJECTS\NexusAI\server
+cd E:\ALL-PROJECTS\Autogenix\server
 .\start_all.ps1
 ```
 
@@ -74,7 +74,7 @@ This will open 2 new terminals automatically:
 
 ### Step 1: Run Diagnostic
 ```powershell
-cd E:\ALL-PROJECTS\NexusAI\server
+cd E:\ALL-PROJECTS\Autogenix\server
 .\check_services.ps1
 ```
 
@@ -135,7 +135,7 @@ Use the `--pool=solo` flag (already in the script).
 ### Tasks still not executing
 1. Check Redis is running: `docker ps`
 2. Check worker is connected: `celery -A app.tasks.build_task:celery_app inspect ping`
-3. Check queue: `docker exec nexusai-redis redis-cli LLEN celery`
+3. Check queue: `docker exec autogenix-redis redis-cli LLEN celery`
 
 ## Architecture Diagram
 

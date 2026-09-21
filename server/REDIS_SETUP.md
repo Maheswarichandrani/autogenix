@@ -1,6 +1,6 @@
-# Redis Docker Setup for NexusAI
+# Redis Docker Setup for Autogenix
 
-This guide will help you set up Redis using Docker for your NexusAI server.
+This guide will help you set up Redis using Docker for your Autogenix server.
 
 ## Prerequisites
 
@@ -14,7 +14,7 @@ This guide will help you set up Redis using Docker for your NexusAI server.
 1. **Start Redis Container**
    ```powershell
    # Navigate to server directory
-   cd E:\ALL-PROJECTS\NexusAI\server
+   cd E:\ALL-PROJECTS\Autogenix\server
    
    # Start Redis in detached mode
    docker-compose up -d redis
@@ -29,7 +29,7 @@ This guide will help you set up Redis using Docker for your NexusAI server.
    docker-compose logs redis
    
    # Test Redis connection
-   docker exec -it nexusai-redis redis-cli ping
+   docker exec -it autogenix-redis redis-cli ping
    ```
    You should see `PONG` as response.
 
@@ -52,14 +52,14 @@ This guide will help you set up Redis using Docker for your NexusAI server.
 
 2. **Create Docker Network**
    ```powershell
-   docker network create nexusai-network
+   docker network create autogenix-network
    ```
 
 3. **Run Redis Container**
    ```powershell
    docker run -d `
-     --name nexusai-redis `
-     --network nexusai-network `
+     --name autogenix-redis `
+     --network autogenix-network `
      -p 6379:6379 `
      -v redis-data:/data `
      redis:7-alpine redis-server --appendonly yes
@@ -68,16 +68,16 @@ This guide will help you set up Redis using Docker for your NexusAI server.
 4. **Verify Redis is Running**
    ```powershell
    # Check if container is running
-   docker ps | Select-String "nexusai-redis"
+   docker ps | Select-String "autogenix-redis"
    
    # Test Redis connection
-   docker exec -it nexusai-redis redis-cli ping
+   docker exec -it autogenix-redis redis-cli ping
    ```
 
 5. **Stop and Remove Container**
    ```powershell
-   docker stop nexusai-redis
-   docker rm nexusai-redis
+   docker stop autogenix-redis
+   docker rm autogenix-redis
    ```
 
 ## Configuration
@@ -115,7 +115,7 @@ Use the main `docker-compose.yml` and set a strong password in your production e
 docker-compose logs -f redis
 
 # Connect to Redis CLI
-docker exec -it nexusai-redis redis-cli
+docker exec -it autogenix-redis redis-cli
 
 # Inside Redis CLI, you can run:
 # PING - test connection
@@ -126,21 +126,21 @@ docker exec -it nexusai-redis redis-cli
 
 ### Check Redis Stats
 ```powershell
-docker exec -it nexusai-redis redis-cli INFO stats
+docker exec -it autogenix-redis redis-cli INFO stats
 ```
 
 ### Backup Redis Data
 ```powershell
 # Create backup
-docker exec nexusai-redis redis-cli SAVE
+docker exec autogenix-redis redis-cli SAVE
 
 # Copy backup file from container
-docker cp nexusai-redis:/data/dump.rdb ./redis-backup.rdb
+docker cp autogenix-redis:/data/dump.rdb ./redis-backup.rdb
 ```
 
 ### Clear All Redis Data
 ```powershell
-docker exec -it nexusai-redis redis-cli FLUSHALL
+docker exec -it autogenix-redis redis-cli FLUSHALL
 ```
 
 ## Troubleshooting

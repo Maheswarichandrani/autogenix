@@ -65,7 +65,7 @@ export function SettingsSidebar() {
               id="username"
               placeholder="Enter username"
               className="h-8 text-sm"
-              defaultValue="user@nexusai.dev"
+              defaultValue="user@autogenix.dev"
             />
           </div>
           <div className="space-y-2">
@@ -76,7 +76,7 @@ export function SettingsSidebar() {
               id="display-name"
               placeholder="Display name"
               className="h-8 text-sm"
-              defaultValue="Nexus Developer"
+              defaultValue="Autogenix Developer"
             />
           </div>
         </CardContent>

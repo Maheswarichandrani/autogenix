@@ -1,4 +1,4 @@
-# NexusAI Server - Complete Startup Guide
+# Autogenix Server - Complete Startup Guide
 
 ## 🔴 CRITICAL: Missing Celery Worker
 
@@ -8,7 +8,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    NexusAI Backend                          │
+│                    Autogenix Backend                          │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  1. FastAPI (port 8000)                                     │
@@ -52,7 +52,7 @@ You need **3 separate terminals** running simultaneously:
 
 ```powershell
 # Navigate to server directory
-cd E:\ALL-PROJECTS\NexusAI\server
+cd E:\ALL-PROJECTS\Autogenix\server
 
 # Start Redis in background
 docker-compose up -d redis
@@ -71,7 +71,7 @@ abc123...      redis:7-alpine  Up 2 minutes   0.0.0.0:6379->6379/tcp
 
 ```powershell
 # Navigate to server directory
-cd E:\ALL-PROJECTS\NexusAI\server
+cd E:\ALL-PROJECTS\Autogenix\server
 
 # Activate venv
 .\venv\Scripts\Activate.ps1
@@ -90,7 +90,7 @@ INFO:     Application startup complete.
 
 ```powershell
 # Navigate to server directory
-cd E:\ALL-PROJECTS\NexusAI\server
+cd E:\ALL-PROJECTS\Autogenix\server
 
 # Run the new start script
 .\start_celery.ps1
@@ -112,7 +112,7 @@ celery -A app.tasks.build_task:celery_app worker --loglevel=info --pool=solo --c
 --- * ***  * -- Windows-10-10.0.xxxxx
 -- * - **** --- 
 - ** ---------- [config]
-- ** ---------- .> app:         aibuild:0x...
+- ** ---------- .> app:         autogenix:0x...
 - ** ---------- .> transport:   redis://localhost:6379//
 - ** ---------- .> results:     redis://localhost:6379/
 - *** --- * --- .> concurrency: 2 (solo)
@@ -133,7 +133,7 @@ celery -A app.tasks.build_task:celery_app worker --loglevel=info --pool=solo --c
 
 ```powershell
 # In a new terminal
-docker exec -it nexusai-redis redis-cli
+docker exec -it autogenix-redis redis-cli
 
 # Inside redis-cli, check for queued tasks
 LLEN celery
@@ -168,7 +168,7 @@ Create a master start script:
 
 ```powershell
 # start_all.ps1
-Write-Host "Starting NexusAI Backend Services..." -ForegroundColor Cyan
+Write-Host "Starting Autogenix Backend Services..." -ForegroundColor Cyan
 
 # 1. Start Redis
 Write-Host "`n1. Starting Redis..." -ForegroundColor Yellow
@@ -233,7 +233,7 @@ For production, use a process manager like **supervisord** or **systemd**:
 [program:celery_worker]
 command=/path/to/venv/bin/celery -A app.tasks.build_task:celery_app worker --loglevel=info --concurrency=4
 directory=/path/to/server
-user=nexusai
+user=autogenix
 autostart=true
 autorestart=true
 redirect_stderr=true

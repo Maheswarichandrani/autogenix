@@ -8,7 +8,7 @@ import React, { useEffect, useRef } from "react";
 import { WorkspacePromptInput } from "./workspace-prompt-input";
 import { ChatMessageItem } from "./chat-message-item";
 import { StreamingMessage } from "./streaming-message";
-import { Bot, Loader2, AlertCircle } from "lucide-react";
+import { Bot, Loader2, AlertCircle, Pause, Play, XCircle, RefreshCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import type { Message, UserAction, WorkflowStage } from "@/types/workflow";
 import type { InProgressMessage } from "@/store/workflow-store";
@@ -29,6 +29,11 @@ interface WorkspaceChatProps {
   isHistoryError:          boolean;
   isSending:               boolean;
   isPendingWorkflowStart?: boolean;
+  isPaused?:               boolean;
+  pauseReason?:            string | null;
+  pausedRole?:             string | null;
+  pausedIteration?:        number;
+  pausedMaxIterations?:    number;
   sendAction:              (action: UserAction) => void;
 }
 
@@ -45,6 +50,11 @@ const WorkspaceChat = ({
   isLoadingHistory,
   isSending,
   isPendingWorkflowStart = false,
+  isPaused = false,
+  pauseReason = null,
+  pausedRole = null,
+  pausedIteration = 0,
+  pausedMaxIterations = 0,
   sendAction,
 }: WorkspaceChatProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -122,12 +132,55 @@ const WorkspaceChat = ({
             </div>
           ) : null}
 
+          {/* Agent paused — iteration budget exhausted, waiting for user */}
+          {isPaused && (
+            <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4 my-3 space-y-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-yellow-600 dark:text-yellow-400">
+                <Pause className="size-4 shrink-0" />
+                <span>
+                  Agent paused — {pausedRole} completed {pausedIteration}/{pausedMaxIterations} iterations
+                </span>
+              </div>
+              {pauseReason && (
+                <p className="text-xs text-muted-foreground">{pauseReason}</p>
+              )}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => sendAction({ action: "agent_continue" })}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                >
+                  <Play className="size-3" />
+                  Continue
+                </button>
+                <button
+                  onClick={() => {
+                    const model = window.prompt("Enter model name (e.g. gpt-4o, claude-sonnet-4-20250514):");
+                    if (model?.trim()) {
+                      sendAction({ action: "agent_switch_model", model: model.trim() });
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors"
+                >
+                  <RefreshCw className="size-3" />
+                  Switch Model
+                </button>
+                <button
+                  onClick={() => sendAction({ action: "agent_cancel" })}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 transition-colors"
+                >
+                  <XCircle className="size-3" />
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
           {isEmpty && (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <div className="size-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
                 <Bot className="size-8 text-primary" />
               </div>
-              <h3 className="text-lg font-semibold mb-2">Start Building with NexusAI</h3>
+              <h3 className="text-lg font-semibold mb-2">Start Building with Autogenix</h3>
               <p className="text-sm text-muted-foreground max-w-md">
                 Describe what you want to build and the AI agents will handle
                 everything — from coding to testing to deployment.
@@ -148,7 +201,7 @@ const WorkspaceChat = ({
             placeholder={
               isBusy
                 ? "Build in progress — please wait..."
-                : "Ask NexusAI to build, modify, or explain..."
+                : "Ask Autogenix to build, modify, or explain..."
             }
           />
         </div>

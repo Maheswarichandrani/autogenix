@@ -19,7 +19,7 @@ export function ProductPreview() {
                             </div>
                             <div className="flex-1 flex justify-center">
                                 <div className="px-4 py-1 rounded-md bg-muted/50 text-xs text-muted-foreground font-mono">
-                                    nexusai.dev/workspace
+                                    autogenix.dev/workspace
                                 </div>
                             </div>
                             <div className="w-14" />

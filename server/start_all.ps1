@@ -1,8 +1,8 @@
-# Start All NexusAI Backend Services
+# Start All Autogenix Backend Services
 # Launches Redis, FastAPI, and Celery Worker in separate terminals
 
 Write-Host "=====================================" -ForegroundColor Cyan
-Write-Host "  Starting NexusAI Backend Services  " -ForegroundColor Cyan
+Write-Host "  Starting Autogenix Backend Services  " -ForegroundColor Cyan
 Write-Host "=====================================" -ForegroundColor Cyan
 
 # 1. Start Redis

@@ -208,7 +208,7 @@ export function ProjectDialogProvider({ children }: ProjectDialogProviderProps) 
               <div className="h-[18px] w-[18px] rounded-[4px] bg-primary flex items-center justify-center text-[9px] font-bold text-white leading-none select-none shrink-0">
                 N
               </div>
-              <span className="text-[13px] text-muted-foreground font-medium">NEXUS-AI</span>
+              <span className="text-[13px] text-muted-foreground font-medium">AUTOGENIX</span>
               <span className="text-[13px] text-muted-foreground/40 mx-0.5">›</span>
               <DialogTitle className="text-[13px] font-medium text-foreground m-0 p-0">
                 New project

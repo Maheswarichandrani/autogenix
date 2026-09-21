@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 from typing import Optional
 
 class Settings(BaseSettings):
-    APP_NAME: str = "NexusAI"
+    APP_NAME: str = "Autogenix"
     DEBUG: bool = False
 
     # NextAuth JWT
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: Optional[str] = None
 
     # Docker
-    DOCKER_NETWORK: str = "aibuild_network"
+    DOCKER_NETWORK: str = "autogenix_network"
     DOCKER_BASE_IMAGE: str = "python:3.11-slim"
 
 

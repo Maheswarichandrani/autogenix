@@ -42,7 +42,7 @@ interface WorkspacePromptInputProps {
 export function WorkspacePromptInput({
     onSubmit,
     isProcessing = false,
-    placeholder = "Ask NexusForge...",
+    placeholder = "Ask Autogenix...",
     className,
     projectId,
 }: WorkspacePromptInputProps) {

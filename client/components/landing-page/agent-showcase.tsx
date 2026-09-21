@@ -20,7 +20,7 @@ const agents = [
     { name: "ThreatNest", role: "Agent", icon: Shield, active: false },
     { name: "OpsOrchestra", role: "Agent", icon: Rocket, active: false },
     { name: "ObserveIQ", role: "Agent", icon: Activity, active: false },
-    { name: "NexusAgent", role: "Conductor", icon: Bot, active: false },
+    { name: "AutogenixAgent", role: "Conductor", icon: Bot, active: false },
 ];
 
 /* ── Feature sub-links ── */
@@ -89,7 +89,7 @@ export function AgentShowcase() {
                                     <span className="text-primary/70">→</span>{" "}
                                     Kicked off a task in{" "}
                                     <span className="text-foreground/80 bg-muted/60 px-1.5 py-0.5 rounded">
-                                        nexus/project-alpha
+                                        autogenix/project-alpha
                                     </span>{" "}
                                     environment.
                                 </p>
@@ -103,7 +103,7 @@ export function AgentShowcase() {
                                 <div className="flex items-start gap-2 text-muted-foreground/70">
                                     <Terminal className="h-3.5 w-3.5 mt-0.5 shrink-0 text-muted-foreground/40" />
                                     <span className="break-all">
-                                        nexus/project-alpha${" "}
+                                        autogenix/project-alpha${" "}
                                         <span className="text-foreground/60">
                                             rg --files -g &apos;*.ts&apos; | head -20
                                         </span>

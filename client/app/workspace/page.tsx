@@ -226,7 +226,7 @@ export default function WorkspacePage() {
                                             <div className="flex items-center gap-2 px-4 py-3 bg-muted/50 rounded-2xl rounded-tl-sm">
                                                 <Loader2 className="h-4 w-4 animate-spin text-primary" />
                                                 <span className="text-sm text-muted-foreground">
-                                                    NexusAgent is coordinating...
+                                                    AutogenixAgent is coordinating...
                                                 </span>
                                             </div>
                                         </div>
@@ -240,7 +240,7 @@ export default function WorkspacePage() {
                                     <WorkspacePromptInput
                                         onSubmit={handlePromptSubmit}
                                         isProcessing={isBuilding}
-                                        placeholder="Ask NexusForge to build, modify, or explain..."
+                                        placeholder="Ask Autogenix to build, modify, or explain..."
                                     />
                                 </div>
                             </div>

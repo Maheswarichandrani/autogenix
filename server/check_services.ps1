@@ -1,8 +1,8 @@
-# NexusAI Service Diagnostic Tool
+# Autogenix Service Diagnostic Tool
 # Checks if all required services are running
 
 Write-Host "=====================================" -ForegroundColor Cyan
-Write-Host "  NexusAI Service Diagnostic         " -ForegroundColor Cyan
+Write-Host "  Autogenix Service Diagnostic         " -ForegroundColor Cyan
 Write-Host "=====================================" -ForegroundColor Cyan
 
 $allGood = $true
@@ -17,7 +17,7 @@ try {
     if ($redisStatus -like "*Up*") {
         Write-Host "✓ Redis is running" -ForegroundColor Green
         
-        $redisPing = docker exec nexusai-redis redis-cli ping 2>&1
+        $redisPing = docker exec autogenix-redis redis-cli ping 2>&1
         if ($redisPing -match "PONG") {
             Write-Host "  └─ Connection test: PONG" -ForegroundColor Green
         } else {
@@ -101,7 +101,7 @@ catch {
 # --------------------------------------------------
 Write-Host "`n[5] Checking Task Queue..." -ForegroundColor Yellow
 try {
-    $queueLength = docker exec nexusai-redis redis-cli LLEN celery 2>&1
+    $queueLength = docker exec autogenix-redis redis-cli LLEN celery 2>&1
 
     if ($queueLength -match '^\d+$') {
         if ([int]$queueLength -gt 0) {

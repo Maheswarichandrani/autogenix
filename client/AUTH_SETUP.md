@@ -1,6 +1,6 @@
-# NexusAI - Authentication Setup Guide
+# Autogenix - Authentication Setup Guide
 
-This guide will help you set up GitHub OAuth authentication for your NexusAI application.
+This guide will help you set up GitHub OAuth authentication for your Autogenix application.
 
 ## Prerequisites
 
@@ -23,7 +23,7 @@ npm install next-auth@beta
 1. Go to [GitHub Developer Settings](https://github.com/settings/developers)
 2. Click "New OAuth App"
 3. Fill in the application details:
-   - **Application name**: NexusAI Local Development
+   - **Application name**: Autogenix Local Development
    - **Homepage URL**: `http://localhost:3000`
    - **Authorization callback URL**: `http://localhost:3000/api/auth/callback/github`
 4. Click "Register application"

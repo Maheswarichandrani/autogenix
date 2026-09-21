@@ -11,7 +11,7 @@ export function Footer() {
           <div className="col-span-2 md:col-span-2">
             <Link href="/" className="flex items-center gap-2 mb-4">
               <Infinity size={24} className="text-primary" />
-              <span className="font-bold text-xl">NexusAI</span>
+              <span className="font-bold text-xl">Autogenix</span>
             </Link>
             <p className="text-sm text-muted-foreground max-w-xs mb-4">
               Build and deploy production-ready backends instantly with AI. No setup required.
@@ -120,7 +120,7 @@ export function Footer() {
         {/* Bottom bar */}
         <div className="flex flex-col md:flex-row justify-between items-center gap-4 mt-12 pt-8 border-t border-border">
           <p className="text-sm text-muted-foreground">
-            © 2026 NexusAI. All rights reserved.
+            © 2026 Autogenix. All rights reserved.
           </p>
           <div className="flex items-center gap-6">
             <Link href="/privacy" className="text-sm text-muted-foreground hover:text-foreground transition-colors">

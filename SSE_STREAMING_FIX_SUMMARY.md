@@ -151,7 +151,7 @@ Chat UI shows complete message history
 ## 🚀 Next Steps (Optional Enhancements)
 
 1. **Better loading states**: Show skeleton loaders during initial message fetch
-2. **Typing indicators**: Add "NexusAI is typing..." when `is_streaming` but no `streaming_text` yet
+2. **Typing indicators**: Add "Autogenix is typing..." when `is_streaming` but no `streaming_text` yet
 3. **Artifact previews**: Rich preview cards for plan/code artifacts in chat
 4. **Error recovery**: Better UX for transient network errors vs permanent failures
 5. **Connection status**: Visual indicator showing SSE connection health

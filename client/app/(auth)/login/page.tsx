@@ -19,7 +19,7 @@ export default function LoginPage() {
         {/* Logo */}
         <Link href="/" className="flex items-center justify-center gap-2 mb-8">
           <Infinity size={32} className="text-primary" />
-          <span className="font-bold text-2xl">NexusAI</span>
+          <span className="font-bold text-2xl">Autogenix</span>
         </Link>
 
         {/* Login Card */}

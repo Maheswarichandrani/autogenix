@@ -167,7 +167,7 @@ def _msg(role: str, message_type: str, text: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════
 
 CONDUCTOR_SYSTEM = """\
-You are Conductor, the orchestrating AI for only server building platform called NexusAI.
+You are Conductor, the orchestrating AI for only server building platform called Autogenix.
 
 Analyse the user's message and call EXACTLY ONE of the two tools:
 
@@ -248,7 +248,7 @@ def conductor_node(state: GraphState) -> dict:
             messages.append(msg)
     messages.append({"role": "user", "content": user_message})
 
-    llm      = get_llm("gpt-3.5-turbo")
+    llm      = get_llm("claude-haiku-4-5")
     response = llm.chat_with_tools(messages, _CONDUCTOR_TOOLS, max_tokens=2048, temperature=0)
 
     if not response.tool_calls:
@@ -1214,7 +1214,7 @@ def deployer_node(state: GraphState) -> dict:
 
     tools = get_deploy_tools(docker, github_token, railway_api_key=railway_api_key)
 
-    project_name = state.get("project_name", "nexus-app")
+    project_name = state.get("project_name", "autogenix-app")
     repo_name    = project_name.lower().replace(" ", "-")[:40]
 
     system = _DEPLOYER_SYSTEM.format(

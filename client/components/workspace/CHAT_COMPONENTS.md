@@ -1,6 +1,6 @@
 # Workspace Chat Components
 
-Complete modular chat system for NexusAI workflow interface.
+Complete modular chat system for Autogenix workflow interface.
 
 ## 🏗️ Architecture
 
@@ -151,7 +151,7 @@ For unknown types, shows JSON preview:
 - Pulsing loader icon
 - "Thinking..." state when no content yet
 - Blinking cursor after streamed text
-- Shows active role in label: "NexusAI (Conductor)"
+- Shows active role in label: "Autogenix (Conductor)"
 
 **Usage:**
 ```tsx

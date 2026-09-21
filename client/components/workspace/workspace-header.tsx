@@ -50,10 +50,10 @@ export function WorkspaceHeader({
                 {/* Logo */}
                 <div className="flex items-center gap-2">
                     <div className="flex aspect-square size-8 min-w-8 min-h-8 items-center justify-center rounded-lg text-sidebar-primary-foreground">
-                        <Image width={86} height={86} src="/images/logo.png" alt="Nexus AI Logo" className="size-8 object-contain" />
+                        <Image width={86} height={86} src="/images/logo.png" alt="Autogenix Logo" className="size-8 object-contain" />
                     </div>
                     <span className="font-bold text-lg tracking-tight hidden sm:block">
-                        Nexus<span className="text-primary">AI</span>
+                        Auto<span className="text-primary">genix</span>
                     </span>
                 </div>
 

@@ -28,7 +28,7 @@ format:
 
 # Check Redis connection
 redis-check:
-	docker exec -it nexusai-redis redis-cli ping
+	docker exec -it autogenix-redis redis-cli ping
 
 # View Celery active tasks
 celery-tasks:

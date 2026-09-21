@@ -25,7 +25,7 @@ export function ConductorCard() {
                                     <div>
                                         <div className="flex items-center gap-2.5">
                                             <h3 className="text-xl font-bold text-foreground">
-                                                NexusAgent
+                                                AutogenixAgent
                                             </h3>
                                             <span className="text-[10px] uppercase tracking-widest text-primary font-semibold px-2 py-0.5 rounded-full border border-primary/30 bg-primary/10">
                                                 Conductor

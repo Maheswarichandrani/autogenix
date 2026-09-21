@@ -1,7 +1,7 @@
-# Start Celery Worker for NexusAI
+# Start Celery Worker for Autogenix
 # This worker processes workflow tasks (build, deploy, etc.)
 
-Write-Host "Starting Celery Worker for NexusAI..." -ForegroundColor Cyan
+Write-Host "Starting Celery Worker for Autogenix..." -ForegroundColor Cyan
 
 # Activate virtual environment
 & .\venv\Scripts\Activate.ps1

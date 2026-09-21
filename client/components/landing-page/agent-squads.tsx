@@ -13,7 +13,7 @@ function SquadCard({ squad, index }: { squad: Squad; index: number }) {
                 <div className="flex items-start justify-between mb-5">
                     <div className="flex items-center gap-3">
                         <div className="inline-flex items-center justify-center w-16 h-16 rounded-sm text-primary-foreground">
-                            <Image src="/images/logo.png" width={80} height={80} className="object-cover" alt="Nexus AI Logo" />
+                            <Image src="/images/logo.png" width={80} height={80} className="object-cover" alt="Autogenix Logo" />
                         </div>
                         <div>
                             <div className="flex items-center gap-2">

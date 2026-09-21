@@ -123,7 +123,7 @@ checkpointer.setup()  # ✅ Now works correctly
 ```powershell
 # Stop current worker (Ctrl+C)
 # Restart with new code
-cd E:\ALL-PROJECTS\NexusAI\server
+cd E:\ALL-PROJECTS\Autogenix\server
 .\start_celery.ps1
 ```
 

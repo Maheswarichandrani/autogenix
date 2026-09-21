@@ -47,7 +47,7 @@ app.include_router(artifact_router, prefix="/api/v1")
 @app.get("/")
 async def root():
     return {
-        "message": "Welcome to the NexusAI API",
+        "message": "Welcome to the Autogenix API",
         "version": "1.0.0",
         "status": "success"
     }

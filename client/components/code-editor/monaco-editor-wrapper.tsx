@@ -65,7 +65,7 @@ const defineCustomTheme: BeforeMount = (monaco) => {
     disableValidation(monaco);
 
     // Dark theme
-    monaco.editor.defineTheme("nexus-dark", {
+    monaco.editor.defineTheme("autogenix-dark", {
         base: "vs-dark",
         inherit: true,
         rules: [
@@ -115,7 +115,7 @@ const defineCustomTheme: BeforeMount = (monaco) => {
     });
 
     // Light theme
-    monaco.editor.defineTheme("nexus-light", {
+    monaco.editor.defineTheme("autogenix-light", {
         base: "vs",
         inherit: true,
         rules: [
@@ -186,7 +186,7 @@ export function MonacoEditorWrapper({
 
     // Get the effective theme (resolving "system" to actual theme)
     const effectiveTheme = mounted ? (theme === "system" ? resolvedTheme : theme) : "dark";
-    const monacoTheme = effectiveTheme === "light" ? "nexus-light" : "nexus-dark";
+    const monacoTheme = effectiveTheme === "light" ? "autogenix-light" : "autogenix-dark";
 
     // Update Monaco theme when theme changes
     useEffect(() => {

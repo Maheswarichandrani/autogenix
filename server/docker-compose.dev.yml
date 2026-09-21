@@ -3,7 +3,7 @@ version: '3.8'
 services:
   redis:
     image: redis:7-alpine
-    container_name: nexusai-redis-dev
+    container_name: autogenix-redis-dev
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -16,7 +16,7 @@ services:
       timeout: 3s
       retries: 3
     networks:
-      - nexusai-network
+      - autogenix-network
     environment:
       - REDIS_PASSWORD=devpassword
 
@@ -25,5 +25,5 @@ volumes:
     driver: local
 
 networks:
-  nexusai-network:
+  autogenix-network:
     driver: bridge

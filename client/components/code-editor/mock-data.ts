@@ -296,7 +296,7 @@ export class PipelineAgent implements Agent {
 
   private getDeploymentURL(build: Build): string {
     const envSubdomain = this.config.environment === 'production' ? '' : \`\${this.config.environment}.\`;
-    return \`https://\${envSubdomain}\${build.projectName}.nexus.app\`;
+    return \`https://\${envSubdomain}\${build.projectName}.autogenix.app\`;
   }
 }`,
                     },
@@ -498,7 +498,7 @@ export class DebateEngine {
 
 async function main() {
   const engine = new ShipyardEngine({
-    projectName: 'nexus-demo',
+    projectName: 'autogenix-demo',
     environment: 'development',
     maxDebateRounds: 3,
     agents: {
@@ -596,7 +596,7 @@ export const defaultConfig: ShipyardConfig = {
         type: "file",
         language: "json",
         content: `{
-  "name": "@nexus/shipyard-engine",
+  "name": "@autogenix/shipyard-engine",
   "version": "1.4.2",
   "description": "AI-powered autonomous code generation engine",
   "main": "dist/index.js",
@@ -709,7 +709,7 @@ Orchestrates build, test, and deployment workflows.
 ## Quick Start
 
 \`\`\`typescript
-import { ShipyardEngine } from '@nexus/shipyard-engine';
+import { ShipyardEngine } from '@autogenix/shipyard-engine';
 
 const engine = new ShipyardEngine({
   projectName: 'my-app',
@@ -722,7 +722,7 @@ console.log(result.deployment.url);
 
 ## License
 
-MIT © Nexus AI
+MIT © Autogenix
 `,
     },
 ];

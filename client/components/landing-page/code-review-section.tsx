@@ -8,7 +8,7 @@ type DiffLine = {
     type: "unchanged" | "removed" | "added" | "modified";
 };
 
-const filePath = "nexus-ai/src/agents/spectra/CodeAgent.ts";
+const filePath = "autogenix/src/agents/spectra/CodeAgent.ts";
 
 const diffLines: DiffLine[] = [
     {
@@ -179,7 +179,7 @@ export function CodeReviewSection() {
                         <p className="text-base sm:text-lg text-muted-foreground leading-relaxed max-w-lg">
                             Understand code changes at a glance with structural diffs for
                             human and agent output. Review, discuss, and merge — all within
-                            Nexus&nbsp;Forge.
+                            Autogenix.
                         </p>
                         <Link
                             href="/getting-started"

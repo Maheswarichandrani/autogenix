@@ -13,19 +13,19 @@ export async function generateMetadata({
     
     if (response.error || !response.data) {
       return {
-        title: "Project | NexusAI",
+        title: "Project | Autogenix",
         description: "AI-powered development workspace",
       };
     }
 
     const project = response.data;
     return {
-      title: `${project.name} | NexusAI`,
+      title: `${project.name} | Autogenix`,
       description: project.description || `Working on ${project.name} project`,
     };
   } catch (error) {
     return {
-      title: "Project | NexusAI",
+      title: "Project | Autogenix",
       description: "AI-powered development workspace",
     };
   }

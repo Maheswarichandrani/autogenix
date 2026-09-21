@@ -19,7 +19,7 @@
 │  │  ┌─────────────────────────────────────────────────┐ │   │
 │  │  │  ChatMessageItem                                 │ │   │
 │  │  │  ┌────────────────────────────────────────────┐  │ │   │
-│  │  │  │ 🤖 NexusAI                                 │  │ │   │
+│  │  │  │ 🤖 Autogenix                                 │  │ │   │
 │  │  │  │ ┌────────────────────────────────────────┐│  │ │   │
 │  │  │  │ │ I'll create a **React** todo app...   ││  │ │   │
 │  │  │  │ │ - User authentication                  ││  │ │   │
@@ -49,7 +49,7 @@
 │  │  ┌─────────────────────────────────────────────────┐ │   │
 │  │  │  StreamingMessage (Live)                         │ │   │
 │  │  │  ┌────────────────────────────────────────────┐  │ │   │
-│  │  │  │ 🤖 NexusAI (Conductor) ⏳                  │  │ │   │
+│  │  │  │ 🤖 Autogenix (Conductor) ⏳                  │  │ │   │
 │  │  │  │ ┌────────────────────────────────────────┐│  │ │   │
 │  │  │  │ │ I'm analyzing your requirements...█    ││  │ │   │
 │  │  │  │ └────────────────────────────────────────┘│  │ │   │
@@ -60,7 +60,7 @@
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │  WorkspacePromptInput                                │   │
 │  │  ┌─────────────────────────────────────────────────┐ │   │
-│  │  │ Ask NexusAI to build, modify, or explain...     │ │   │
+│  │  │ Ask Autogenix to build, modify, or explain...     │ │   │
 │  │  └─────────────────────────────────────────────────┘ │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
@@ -108,7 +108,7 @@
 ### Streaming Message
 ```
 ┌──────────────────────────────────┐
-│  🤖 NexusAI (Conductor) ⏳       │  ← Agent name + spinner
+│  🤖 Autogenix (Conductor) ⏳       │  ← Agent name + spinner
 │  ┌────────────────────────────┐ │
 │  │ Analyzing requirements...█ │ │  ← Pulsing cursor
 │  └────────────────────────────┘ │
@@ -137,7 +137,7 @@
         │     ⏳    │
         └───────────┘
     
-  Start Building with NexusAI
+  Start Building with Autogenix
   
   Describe what you want to build,
   request a plan, or ask for
@@ -147,7 +147,7 @@
 ### Processing (Input disabled)
 ```
 ┌──────────────────────────────────┐
-│ Ask NexusAI...        [⏳]       │  ← Disabled state
+│ Ask Autogenix...        [⏳]       │  ← Disabled state
 └──────────────────────────────────┘
 ```
 

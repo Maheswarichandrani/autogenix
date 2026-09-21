@@ -41,7 +41,7 @@ export default function IntegrationsPage() {
         <div>
           <h2 className="text-2xl font-semibold">Integrations</h2>
           <p className="text-sm text-muted-foreground">
-            Connect Nexus-AI with your development and productivity tools.
+            Connect Autogenix with your development and productivity tools.
           </p>
         </div>
       </div>

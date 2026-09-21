@@ -1,4 +1,4 @@
-# 🚀 NexusAI
+# 🚀 Autogenix
 
 AI-powered application builder with a Next.js frontend and FastAPI backend.
 
@@ -7,7 +7,7 @@ AI-powered application builder with a Next.js frontend and FastAPI backend.
 ## 📁 Project Structure
 
 ```
-NexusAI/
+Autogenix/
 ├── client/          → Next.js frontend (React, TypeScript, Tailwind CSS)
 └── server/          → FastAPI backend  (Python, SQLAlchemy, PostgreSQL)
 ```
@@ -33,8 +33,8 @@ Make sure you have these installed:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/Srikar132/nexus-ai.git
-cd nexus-ai
+git clone https://github.com/Maheswarichandrani/autogenix.git
+cd autogenix
 ```
 
 ---
@@ -60,7 +60,7 @@ pip install -r requirements.txt
 
 ```env
 # Database (PostgreSQL)
-DATABASE_URL=postgresql+asyncpg://postgres:yourpassword@localhost:5432/nexusai
+DATABASE_URL=postgresql+asyncpg://postgres:yourpassword@localhost:5432/autogenix
 
 # NextAuth Secret (must match the client's NEXTAUTH_SECRET)
 NEXTAUTH_SECRET=your-nextauth-secret

@@ -33,7 +33,7 @@ export function AssistantMessage({ message }: AssistantMessageProps) {
           </AvatarFallback>
         </Avatar>
         <div className="text-xs font-medium text-muted-foreground">
-          NexusAI
+          Autogenix
         </div>
       </div>
 

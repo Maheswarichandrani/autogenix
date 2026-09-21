@@ -11,7 +11,7 @@ const privacyItems = [
     key: "aiMemory" as const,
     icon: BrainCircuit,
     title: "AI Memory",
-    description: "Allow Nexus-AI to remember context across sessions for better responses.",
+    description: "Allow Autogenix to remember context across sessions for better responses.",
   },
   {
     key: "fileStorage" as const,
@@ -58,7 +58,7 @@ export default function PrivacySettingsPage() {
         <div>
           <h2 className="text-2xl font-semibold">Privacy</h2>
           <p className="text-sm text-muted-foreground">
-            Manage how Nexus-AI protects your data
+            Manage how Autogenix protects your data
           </p>
         </div>
       </div>

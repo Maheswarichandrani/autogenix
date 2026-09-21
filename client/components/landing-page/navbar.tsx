@@ -11,7 +11,7 @@ export function Navbar() {
           <div className="flex items-center gap-2">
             <Infinity size={24} />
             <span className="font-bold text-xl">
-              NexusAI
+              Autogenix
             </span>
           </div>
         </Link>

@@ -27,7 +27,7 @@ export function HeroHeader() {
                 >
                     <Sparkles className="h-3.5 w-3.5 text-primary" />
                     <span className="text-sm font-medium">
-                        Introducing Nexus Forge — Now in Beta
+                        Introducing Autogenix — Now in Beta
                     </span>
                     <ChevronRight className="h-3.5 w-3.5 text-primary" />
                 </Badge>
@@ -40,7 +40,7 @@ export function HeroHeader() {
 
                 {/* Subheading */}
                 <p className="mt-6 text-base sm:text-lg md:text-xl text-muted-foreground max-w-2xl leading-relaxed">
-                    Talk to it like a CTO. Nexus Forge builds, ships, secures, and monitors
+                    Talk to it like a CTO. Autogenix builds, ships, secures, and monitors
                     your software — completely autonomously — using a swarm of specialized AI agents.
                 </p>
 

@@ -52,7 +52,7 @@ def check_docker_health():
         # 3. Test container creation and basic operations
         print(f"\n3. Testing container operations...")
         
-        test_container_name = "nexus-health-check"
+        test_container_name = "autogenix-health-check"
         
         # Clean up any existing test container
         try:
@@ -75,7 +75,7 @@ def check_docker_health():
         # Test file write operation
         import io, tarfile
         
-        test_content = "Hello from NexusAI health check!\n"
+        test_content = "Hello from Autogenix health check!\n"
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w") as tar:
             encoded = test_content.encode("utf-8")
@@ -125,4 +125,4 @@ if __name__ == "__main__":
         print("   • On Windows, ensure WSL2 is properly configured")
         sys.exit(1)
     else:
-        print(f"\n✅ Docker is healthy and ready for NexusAI builds!")
+        print(f"\n✅ Docker is healthy and ready for Autogenix builds!")

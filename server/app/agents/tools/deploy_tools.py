@@ -124,8 +124,8 @@ def get_deploy_tools(docker: DockerManager, github_token: str, railway_api_key: 
 
         steps = [
             ("git init",                                           "Init git"),
-            ("git config user.email 'bot@nexusai.build'",         "Set git email"),
-            ("git config user.name 'NexusAI Build Bot'",          "Set git name"),
+            ("git config user.email 'bot@autogenix.build'",         "Set git email"),
+            ("git config user.name 'Autogenix Build Bot'",          "Set git name"),
             (f"git remote remove origin 2>/dev/null || true",     "Clear old origin"),
             (f"git remote add origin {token_url}",                "Add origin"),
             ("git add -A",                                        "Stage files"),

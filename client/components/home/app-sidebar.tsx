@@ -109,10 +109,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenuButton size="lg" asChild>
               <Link href="/home" className="flex items-center gap-2">
                 <div className="flex aspect-square size-8 min-w-8 min-h-8 items-center justify-center rounded-lg text-sidebar-primary-foreground">
-                  <Image width={86} height={86} src="/images/logo.png" alt="Nexus AI Logo" className="size-8 object-contain" />
+                  <Image width={86} height={86} src="/images/logo.png" alt="Autogenix Logo" className="size-8 object-contain" />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">Nexus AI</span>
+                  <span className="truncate font-semibold">Autogenix</span>
                   <span className="truncate text-xs">Enterprise</span>
                 </div>
               </Link>
