@@ -28,6 +28,27 @@ What changed, for reference when you hit an old branch or a stale container:
 
 The working directory is still called `nexus-ai` on some machines. That is cosmetic — git does not care about the folder name. Rename it locally whenever convenient.
 
+### 0.1 Repository and branches
+
+Autogenix lives at **`https://github.com/Maheswarichandrani/autogenix.git`**.
+
+| Branch | Purpose |
+| --- | --- |
+| `main` | Releasable. Never commit to it directly; it only advances by merging `develop`. |
+| `develop` | Integration branch. Feature branches merge here. |
+| `feature/<short-name>` | One branch per unit of work. Branch from `develop`, merge back via PR. |
+
+**History note — read this before you go looking for old commits.** The project previously lived at `Srikar132/nexus-ai`, whose `main` carried 32 commits ending 2026-02-27. The branch this repository was seeded from (`srikar`) was started as a **separate git root** on that same day, so the two histories share no common ancestor and cannot be merged. The old `main` is fully superseded — everything unique to it was either relocated (`workspace/code-editor/` → `components/code-editor/`, `build_task.py` → `build_worker.py`, `code-store.ts` → `code-stream-store.ts`), empty (`workflow_approval_tests.py`), or an abandoned earlier approach (`workspace/code-panel/`). It is preserved in the old repository; do not attempt to merge it in.
+
+Local remotes are configured as:
+
+```
+origin     https://github.com/Srikar132/nexus-ai.git        (old, read-only in practice)
+autogenix  https://github.com/Maheswarichandrani/autogenix.git
+```
+
+Push to the new repo explicitly: `git push autogenix <branch>`. A bare `git push` still targets the old repository — check `git remote -v` before pushing.
+
 ---
 
 ## 1. What Autogenix is
