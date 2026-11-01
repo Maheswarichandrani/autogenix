@@ -1,710 +1,309 @@
-# AGENTS.md — Autogenix
+# AGENTS.md
 
-You are a **principal-level full-stack engineer and AI implementation agent** working on **Autogenix** (formerly NexusAI), an autonomous multi-agent platform that turns a natural-language request into a built, security-tested, deployed backend application.
+You are a **principal-level full-stack engineer and AI implementation agent** working on **Autogenix**, an autonomous multi-agent platform that turns a chat message into a built, security-tested, deployed backend application.
 
-This file is the single source of truth for how this repository works, what is broken in it, and how work on it must be done. Read it fully before touching code.
+Your job is to understand the request, use the right project skills, write a clear implementation prompt, get approval, then implement.
 
----
-
-## 0. Naming — NEXUS-AI → AUTOGENIX
-
-The product is **Autogenix**. The rename has been applied across the codebase (45 files, ~135 occurrences). `Autogenix` is the only correct name in anything you write.
-
-What changed, for reference when you hit an old branch or a stale container:
-
-| Layer | Old → New |
-| --- | --- |
-| Backend identity | `APP_NAME = "NexusAI"` → `"Autogenix"`; root endpoint message; `Celery("aibuild", …)` → `Celery("autogenix", …)` |
-| Docker network | `DOCKER_NETWORK = "aibuild_network"` → `"autogenix_network"` |
-| Agent prompts | `CONDUCTOR_SYSTEM` platform name; `deployer_node` default repo `"nexus-app"` → `"autogenix-app"` |
-| Infra | Redis container and Docker network renamed from the old `nexusai-*` prefix to `autogenix-redis` / `autogenix-network` in both compose files and every PowerShell script |
-| Frontend | Brand strings in 20 files; Monaco themes `nexus-dark`/`nexus-light` → `autogenix-dark`/`autogenix-light`; sub-brands `NexusForge`/`NexusAgent` collapsed into `Autogenix`/`AutogenixAgent` |
-| Database | `DATABASE_URL` database name `nexusai` → `autogenix` in the README. An **existing local database may keep its old name** — it is only a connection string. New setups use `autogenix`. |
-| Repo | Clone URL is now `https://github.com/Maheswarichandrani/autogenix.git` |
-
-**Not renamed on purpose:** `server/app/agents/*.bak` (dead files, delete them — §6.13f) and this file's own §6 defect descriptions where the old name is quoted as historical fact.
-
-⚠️ **After pulling the rename:** the Celery app name and the Redis container name both changed. Stop the old worker, `docker rm -f autogenix-redis`, prune stray build containers (`python server/cleanup_containers.py`), and purge the queue before starting again. A worker on the new name will not see tasks queued under the old one.
-
-The working directory is still called `nexus-ai` on some machines. That is cosmetic — git does not care about the folder name. Rename it locally whenever convenient.
-
-### 0.1 Repository and branches
-
-Autogenix lives at **`https://github.com/Maheswarichandrani/autogenix.git`**.
-
-| Branch | Purpose |
-| --- | --- |
-| `main` | Releasable. Never commit to it directly; it only advances by merging `develop`. |
-| `develop` | Integration branch. Feature branches merge here. |
-| `feature/<short-name>` | One branch per unit of work. Branch from `develop`, merge back via PR. |
-
-**History note — read this before you go looking for old commits.** The project previously lived at `Srikar132/nexus-ai`, whose `main` carried 32 commits ending 2026-02-27. The branch this repository was seeded from (`srikar`) was started as a **separate git root** on that same day, so the two histories share no common ancestor and cannot be merged. The old `main` is fully superseded — everything unique to it was either relocated (`workspace/code-editor/` → `components/code-editor/`, `build_task.py` → `build_worker.py`, `code-store.ts` → `code-stream-store.ts`), empty (`workflow_approval_tests.py`), or an abandoned earlier approach (`workspace/code-panel/`). It is preserved in the old repository; do not attempt to merge it in.
-
-Local remotes are configured as:
-
-```
-origin     https://github.com/Srikar132/nexus-ai.git        (old, read-only in practice)
-autogenix  https://github.com/Maheswarichandrani/autogenix.git
-```
-
-Push to the new repo explicitly: `git push autogenix <branch>`. A bare `git push` still targets the old repository — check `git remote -v` before pushing.
+Deep detail lives in [docs/PROJECT_REFERENCE.md](docs/PROJECT_REFERENCE.md): auth flow diagrams, the full defect list (§6), and the repair roadmap designs (§7). Read the relevant section before working in that area. Section numbers below written as "Reference §x" point to that file.
 
 ---
 
-## 1. What Autogenix is
+# 1. What you are building
 
-A user types "build me a REST API for a bookstore with JWT auth". Autogenix then, without further input:
+A user types a request like "build me a REST API for a bookstore with JWT auth". Autogenix then:
 
-1. **Conductor** decides whether that is a build request or ordinary chat.
-2. **Artificer** spins up a Docker container, writes the whole application into `/workspace`, installs dependencies, checks syntax, and starts the app on port 8080.
-3. **Guardian** attacks the running app — SQL injection, auth bypass, rate limiting, security headers, source review — and emits a structured verdict.
-4. **Artificer (fix pass)** patches whatever Guardian found, restarts the app, and Guardian re-tests (bounded loop).
-5. **Deployer** creates a GitHub repo, pushes the workspace, deploys to Railway, and reports the live URL.
+1. **Conductor** decides whether the message is a build request or ordinary chat.
+2. **Artificer** starts a Docker container, writes the app into `/workspace`, installs dependencies, checks syntax, and starts it on port 8080.
+3. **Guardian** attacks the running app and emits a structured security verdict.
+4. **Artificer fix pass** patches the findings and Guardian retests, in a bounded loop.
+5. **Deployer** creates a repo in the user's own GitHub account, pushes the code, deploys to Railway, and reports the live URL. It waits for the user's confirmation first.
 
-Throughout, every reasoning step, tool call, tool result, and generated file streams live to the browser: a chat panel on the left, a Monaco code editor filling up file-by-file on the right.
+Every reasoning step, tool call, and generated file streams live to the browser: chat on the left, Monaco code editor on the right.
 
-**Status: steps 3–5 are currently disabled in code.** See §6.
+**Current state:** steps 3 to 5 are built but switched off. The graph ends after Artificer (`server/app/agents/workflow.py`, Reference §6.1).
 
----
-
-## 2. Repository layout
-
-```
-autogenix/
-├── client/                      Next.js 16 frontend
-│   ├── app/                     App Router pages
-│   │   ├── (auth)/login/        GitHub sign-in
-│   │   ├── (root)/              Landing page
-│   │   ├── api/auth/[...nextauth]/  NextAuth route handlers
-│   │   ├── getting-started/     Onboarding
-│   │   ├── home/                Dashboard, projects, settings
-│   │   └── project/[id]/        The workspace (chat + code editor)
-│   ├── components/
-│   │   ├── workspace/           Chat, streaming message, task panel, sidebars
-│   │   ├── code-editor/         Monaco wrapper, file explorer, tabs
-│   │   ├── landing-page/        Marketing sections
-│   │   └── ui/                  shadcn/ui primitives
-│   ├── hooks/                   use-workflow (SSE), use-code-stream, use-typewriter
-│   ├── lib/api/                 Typed fetch layer (config, fetch, messages, projects, users)
-│   ├── lib/auth.ts              NextAuth v5 config
-│   ├── proxy.ts                 Route middleware (Next 16 renamed middleware.ts → proxy.ts)
-│   ├── store/                   Zustand: workflow-store, code-stream-store, right-sidebar-store
-│   └── types/                   workflow.ts — SSE event union, mirrors server enums
-└── server/                      FastAPI backend
-    ├── app/
-    │   ├── main.py              App factory, CORS, auth middleware, routers
-    │   ├── agents/
-    │   │   ├── workflow.py      LangGraph StateGraph — the 4 agent nodes
-    │   │   ├── react.py         Resumable ReAct loop (reason → act → observe)
-    │   │   ├── execution_registry.py  Pause/resume/cancel control plane
-    │   │   ├── rag.py           ProjectRAG — pgvector code search (DEAD CODE, §6.4)
-    │   │   ├── embedder.py      sentence-transformers all-MiniLM-L6-v2, 384-dim
-    │   │   └── tools/           docker_tools, security_tools, deploy_tools
-    │   ├── api/
-    │   │   ├── middleware/auth.py   NextAuth JWE decryption
-    │   │   ├── deps.py              get_current_user
-    │   │   └── routes/v1/           user, project, message, build, artifact, env_vars
-    │   ├── core/
-    │   │   ├── config.py        Pydantic settings from .env
-    │   │   ├── database.py      Async SQLAlchemy engine + session
-    │   │   ├── docker_manager.py One container per build; write/read/exec/start/reattach
-    │   │   ├── llm.py           Provider abstraction: Anthropic | OpenAI | Groq
-    │   │   ├── redis.py         Pub/sub bridge worker → SSE
-    │   │   └── stream_parser.py
-    │   ├── models/              SQLAlchemy 2.0: User, Project, Build, Message, Artifact, ProjectEnvVar
-    │   ├── repositories/        Data access per aggregate
-    │   ├── schemas/             Pydantic request/response + shared enums
-    │   └── tasks/build_worker.py  Celery tasks that drive the LangGraph
-    └── alembic/versions/        3 migrations
-```
+This is a final-year project. Prefer finishing and demonstrating the core pipeline over adding new surface area. Build nothing beyond the roadmap in section 14. Do not overbuild.
 
 ---
 
-## 3. Tech stack — what is actually used
+# 2. How to work
 
-| Concern | Choice | Where |
-| --- | --- | --- |
-| Frontend framework | Next.js 16.1.6, React 19.2, App Router | `client/` |
-| Styling | Tailwind CSS v4, shadcn/ui, Radix, framer-motion | `client/components/ui/` |
-| Client state | Zustand (live workflow state), TanStack Query (initial history fetch only) | `client/store/`, `client/hooks/use-workflow.ts` |
-| Code editor | Monaco via `@monaco-editor/react`, `react-complex-tree` for the file tree | `client/components/code-editor/` |
-| **Authentication** | **NextAuth v5 beta (Auth.js), GitHub OAuth only** | `client/lib/auth.ts`, `client/proxy.ts` |
-| API framework | FastAPI 0.129 | `server/app/main.py` |
-| ORM | SQLAlchemy 2.0 async + asyncpg; psycopg2/psycopg3 sync in the worker | `server/app/core/database.py` |
-| Database | PostgreSQL (Neon-compatible), pgvector extension for RAG | `server/alembic/` |
-| Migrations | Alembic 1.18 | `server/alembic/` |
-| Background jobs | Celery 5.6 + Redis 7 broker/backend | `server/app/tasks/build_worker.py` |
-| Agent orchestration | **LangGraph 1.0.9** with `PostgresSaver` checkpointing | `server/app/agents/workflow.py` |
-| LLM providers | Anthropic, OpenAI, Groq behind one interface | `server/app/core/llm.py` |
-| Embeddings | sentence-transformers `all-MiniLM-L6-v2` (local, free, 384-dim) | `server/app/agents/embedder.py` |
-| Sandbox | Docker SDK — one throwaway container per build | `server/app/core/docker_manager.py` |
-| Realtime transport | **Redis pub/sub → SSE via `sse-starlette` EventSourceResponse → browser `EventSource`** | `server/app/core/redis.py`, `client/hooks/use-workflow.ts` |
-| Deploy target | GitHub API + Railway GraphQL API | `server/app/agents/tools/deploy_tools.py` |
-| Secret encryption | Fernet (server, for OAuth tokens); AES-256-GCM in-browser (project env vars) | `server/app/utils/encryption.py`, `server/app/models/project_env_var.py` |
+**Questions, discussion, and planning:** answer directly, based on the code. No prompt file is needed. Check the code rather than trusting this file or the reference when the answer matters.
 
-**Not used, do not introduce:** Clerk, Auth0, Supabase auth, Prisma, tRPC, socket.io (yet — see §7.4), LangChain agents (only `langchain_core.tools` for the `@tool` decorator and `BaseTool` typing).
+**Implementation:** follow this loop for every request:
 
----
+1. Read this file, then the skills the user named, then any supporting skills you clearly need (section 4).
+2. Read the code you will change and the file around it. Check Reference §6 for an existing defect with a decided approach.
+3. Ask one focused question only if the task is genuinely ambiguous.
+4. Write an implementation prompt in `prompts/` covering the goal, the skills you read, the code you inspected, your decisions and assumptions, the files you expect to touch, the requirements, the security considerations, the acceptance criteria, the checks to run, and the exact manual test steps.
+5. Ask the user in the question panel, with Yes and No as selectable options so they choose instead of typing: `I prepared the implementation prompt at prompts/<name>.md. Is this good to execute?`
+6. Once approved, build strictly to that prompt and run the checks (section 13). Then close with a short report using bullets, not paragraphs, under three headings:
+   - `What I did`: a few one line bullets.
+   - `Test`: numbered steps to run or see.
+   - `Needs your attention`: bullets for anything the user must decide or fix, or say there are none.
+     Keep every line short. Put detail and rationale in the prompt file, not in this report.
 
-## 4. Authentication — read this before touching anything auth-related
+When you need a decision or input from the user, ask through your interactive question panel (for example AskUserQuestion), so it opens the native prompt for whatever agent you are. Use plain text only if you have no such panel.
 
-This is the part teams get wrong. There are **two different tokens** and they do different jobs.
+Do not write code before the prompt is approved, unless the user tells you to skip the prompt.
 
-### 4.1 The flow
+Do not fix unrelated defects in the same change. Note them and land them separately.
 
-```
-Browser                    Next.js (client/)                FastAPI (server/)              GitHub
-   │                              │                              │                          │
-   │──  click "Sign in" ─────────▶│                              │                          │
-   │                              │── OAuth redirect ────────────────────────────────────── ▶│
-   │◀──────────────────────────── callback with code ─────────────────────────────────────── │
-   │                              │                              │                          │
-   │                              │  signIn() callback           │                          │
-   │                              │  POST /api/v1/users/signin ─▶│                          │
-   │                              │  { github_token }            │  verify token w/ GitHub ▶│
-   │                              │                              │  upsert User row         │
-   │                              │                              │  Fernet-encrypt the      │
-   │                              │                              │  GitHub token → DB       │
-   │                              │◀─ { id, email, username,  ───│                          │
-   │                              │     onboarding_completed }   │                          │
-   │                              │                              │                          │
-   │                              │  jwt() callback: put the     │                          │
-   │                              │  DATABASE user id in the JWT │                          │
-   │                              │                              │                          │
-   │◀─ Set-Cookie: ───────────────│                              │                          │
-   │   authjs.session-token       │                              │                          │
-   │   (encrypted JWE, HttpOnly)  │                              │                          │
-   │                              │                              │                          │
-   │── any API call, cookie sent ────────────────────────────── ▶│  NextAuthJWTMiddleware   │
-   │                              │                              │  HKDF-derives key from   │
-   │                              │                              │  the shared secret,      │
-   │                              │                              │  decrypts the JWE,       │
-   │                              │                              │  sets request.state      │
-```
+**Teaching:** the project owner is comfortable in Python and is still learning FastAPI, Pydantic, SQLAlchemy, Celery, LangGraph, and the Docker SDK. Explain these in plain language when they come up, using this project's real code as the example.
 
-### 4.2 The two tokens
+**Git:**
 
-| Token | Lives where | Purpose | Never do |
-| --- | --- | --- | --- |
-| **GitHub OAuth access token** | Fernet-encrypted in `users.github_token_encrypted`. Decrypted only inside a Celery task, in memory, for the duration of a deploy. | Create repos, push code on the user's behalf. Scope: `read:user user:email repo`. | Never put it in the session, never send it to the browser, never log it. `client/lib/auth.ts` explicitly strips it from the session — keep it that way. |
-| **NextAuth session JWE** | `authjs.session-token` HttpOnly cookie. | Proves identity to FastAPI. Carries `{ id, email, username, onboardingCompleted }` where `id` is the **Postgres user id**, not the GitHub id. | Never read it in client JS; it is HttpOnly and encrypted. Never use `getSession()` inside a server-side NextAuth callback — `client/lib/auth.ts` documents why (it throws; use plain `fetch`). |
-
-### 4.3 Server-side verification
-
-`server/app/api/middleware/auth.py` runs on **every** request. It:
-
-- lets `OPTIONS` (CORS preflight), `/`, `/docs`, `/openapi`, `/redoc`, `/health` and `/api/v1/users/signin` through unauthenticated;
-- otherwise calls `JWT_HANDLER(request)` from `fastapi_nextauth_jwt`, which reads the cookie, derives the decryption key via HKDF from the shared secret, and decrypts the JWE;
-- sets `request.state.user_id`, `request.state.user_email`, `request.state.user_jwt`;
-- returns 401 on any failure.
-
-`app/api/deps.py::get_current_user` then loads the `User` row from `request.state.user_id`. **Every route depends on it.** Ownership is enforced per query — `ProjectRepo.get_by_id(project_id, user_id)` always takes the user id; never write a repository method that fetches by id alone.
-
-### 4.4 Route protection on the frontend
-
-`client/proxy.ts` (Next.js 16 renamed `middleware.ts` → `proxy.ts` — this is not a mistake) wraps `auth()` and:
-
-- redirects signed-in users away from `/login` and `/` to `/home`;
-- redirects anonymous users to `/login` for anything non-public;
-- forces users with `onboardingCompleted === false` to `/getting-started`.
-
-### 4.5 ⚠️ Live secret-name mismatch — fix this first
-
-The shared secret **must be byte-identical** on both sides or every API call 401s.
-
-| Side | Variable currently read | File |
-| --- | --- | --- |
-| Client | `AUTH_SECRET` | `client/lib/auth.ts` (`secret:`) |
-| Server | `NEXTAUTH_SECRET` | `server/app/core/config.py` |
-| README documents | `NEXTAUTH_SECRET` on both | `README.md` |
-
-Likewise the GitHub app credentials: `client/lib/auth.ts` reads `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`, while `README.md` tells you to set `AUTH_GITHUB_ID` / `AUTH_GITHUB_SECRET`. **The code wins.** Pick one naming scheme, apply it to code + README + a committed `.env.example`, and delete the other.
+- Commit or push only when the user asks.
+- `main` is releasable. Never commit to it directly.
+- `develop` is the intended integration branch, but it does not exist yet. Ask before creating it.
+- One `feature/<short-name>` branch per unit of work.
+- The remote is `origin` at `https://github.com/Maheswarichandrani/autogenix.git`. Confirm with `git remote -v` before pushing.
 
 ---
 
-## 5. How a request flows end to end
+# 3. UI work
 
-### 5.1 Write path
-
-```
-POST /api/v1/projects/{id}/messages   { action: "send_message", content: "..." }
-  ↓ message_routes.send_message
-  ↓ persist a user Message row, mint or reuse project.langgraph_thread_id
-  ↓ Celery: start_workflow_task (first message) | resume_workflow_task (subsequent)
-  ↓ [Celery worker process]
-  ↓ build_worker._workflow()  → cached compiled LangGraph + PostgresSaver pool
-  ↓ wf.stream(...) drives nodes until an interrupt or END
-  ↓ each node calls run_react_agent(), which calls tools, which publish to Redis
-```
-
-### 5.2 Read path
-
-```
-Redis channel project:{id}:stream   ← publish() from the worker (sync client)
-Redis channel project:{id}:code     ← publish_code() from write_file/delete_file
-  ↓ FastAPI GET /messages/stream and /messages/code-stream
-  ↓ redis.subscribe_and_stream() async generator
-  ↓ sse_starlette.EventSourceResponse(ping=15)   ← NOT StreamingResponse, see §5.4
-  ↓ browser EventSource
-  ↓ useWorkflow.onmessage → flushSync(handleSSEEvent) → Zustand → React
-```
-
-### 5.3 The event taxonomy
-
-`client/types/workflow.ts` and `server/app/schemas/enums.py` are mirrors. Change one, change the other in the same commit.
-
-| Event | Meaning | UI behaviour |
-| --- | --- | --- |
-| `stage_change` | Pipeline stage moved | Header stage pill |
-| `thinking` | Transient status | **Replaces** the single status line |
-| `step` | A tool is about to run | **Appends** a row to the step timeline |
-| `tool_call` / `tool_result` | Tool detail, `is_error` flag | Nested under its step row |
-| `text_chunk` | One word of the agent's prose | Appends, drives the typewriter |
-| `agent_start` / `agent_done` | Agent bracket | Opens/closes a message bubble |
-| `file_created` / `file_deleted` | Code panel only, separate channel | Monaco file tree + tab |
-| `artifact` | Structured card (`env_var_request`, `connect_railway`) | Renders an interactive card |
-| `agent_paused` / `agent_resumed` / `agent_cancelled` / `model_switched` | Human-in-the-loop control | Pause banner with Continue / Switch model / Cancel |
-| `done` / `build_failed` / `close_stream` / `error` | Terminal | Settles the UI; the SSE connection deliberately stays open |
-
-### 5.4 Two streaming traps already solved — do not regress them
-
-1. **Server:** FastAPI's `StreamingResponse` buffers in uvicorn and delivers every event in one burst at the end. `EventSourceResponse` from `sse-starlette` flushes per event. `server/app/api/routes/v1/message_routes.py` carries a long comment about this. Do not "simplify" it back.
-2. **Client:** React 18+ batches state updates from native listeners, including `EventSource.onmessage`, so 200 `text_chunk` updates collapse into one render. `client/hooks/use-workflow.ts` wraps only the high-frequency events in `flushSync`. Do not add `flushSync` to one-shot events — it degrades performance.
+You do not design UI. Where a design reference is provided, reproduce it exactly: layout, spacing, typography, color, and states. Do not restyle or improve beyond the reference. Reuse `client/components/ui/` (shadcn) and existing Tailwind patterns before adding anything new. Everything must work down to mobile width.
 
 ---
 
-## 6. Known defects — verified, with file and line
+# 4. Skills to lean on
 
-These are real, present in `main` as of this writing, and must be understood before any feature work. Several make whole features unreachable.
+Reach for these instead of guessing. Do not invent new ones.
 
-### 6.1 🔴 The pipeline is cut off after Artificer
+- `code-review`, for reviewing a diff or branch for bugs.
+- `security-review`, for changes touching auth, tokens, the sandbox, or deploy.
+- `simplify`, for cleanup after a change works.
+- `run`, for launching the app to confirm a change really works.
+- `claude-api`, when working on Anthropic calls in `server/app/core/llm.py`.
+- `fastapi` (`.claude/skills/fastapi/SKILL.md`), for routes, dependencies, Pydantic models, and SSE.
 
-`server/app/agents/workflow.py:1338`
+The `fastapi` skill is general advice, and this project overrides it in these places:
 
-```python
-# TEMPORARY: End workflow after artificer for debugging
-graph.add_edge("artificer", END)
-# COMMENTED OUT FOR ARTIFICER DEBUGGING:
-# graph.add_conditional_edges("guardian", route_after_guardian, {...})
-# graph.add_edge("artificer_fix", "guardian")
-# graph.add_edge("deployer", END)
-```
+- Keep SQLAlchemy and Alembic. Do not switch to SQLModel.
+- Keep `EventSourceResponse` from `sse-starlette` on the streaming routes (section 12).
+- Keep `pip` and `requirements.txt` unless the user decides otherwise. Do not add uv, Ruff, or ty on your own.
+- Do not use `app.frontend()`. Next.js serves the UI.
+- In existing route files, match the current `= Depends(...)` style. Use `Annotated` in new files only.
 
-`guardian`, `artificer_fix` and `deployer` are registered as nodes but **unreachable**. There is no security testing, no fix loop, no deploy. `interrupt_before=["deployer"]` never fires, so `deploy_confirm_task` and `railway_connect_task` can never run. The env-var request card is never emitted.
+For agent graph work, use these LangGraph skills:
 
-Related debug residue shipped to users: `workflow.py:565` publishes `"🔧 ARTIFICER STAGE COMPLETE - Workflow ended for debugging."`
+- `langgraph-fundamentals`, for `StateGraph`, nodes, edges, and routing in `workflow.py`.
+- `langgraph-persistence`, for `PostgresSaver`, checkpoints, and thread ids.
+- `langgraph-human-in-the-loop`, for pause, resume, and approval work.
+- `langgraph-python-quickstart`, for small learning examples only, outside this repo.
 
-### 6.2 🔴 `Build.metadata_` does not exist
+They are general advice, and this project overrides them in these places:
 
-`server/app/tasks/build_worker.py:227-229` does `build.metadata_ or {}` then assigns to it. `server/app/models/build.py` has **no** `metadata_` column — it has `progress: JSONB`. (`metadata` itself is reserved by SQLAlchemy Declarative, hence the underscore convention used on `Message`.) Any build that produces a `run_config` raises `AttributeError` at persist time, which the task's `except` swallows into a `build_failed` event.
+- Keep the existing custom ReAct loop in `react.py`. Do not replace it with `create_agent` or `create_deep_agent`.
+- Keep the Python tools defined in `agents/tools/`, using `langchain_core.tools`.
+- The graph parks with `interrupt_before` today. Propose any move to `interrupt()` in an implementation prompt first.
+- Treat the RAG code in `agents/rag.py` as the base for search work. Keep pgvector, not Chroma, FAISS, or Pinecone.
+- Do not add LangSmith or any hosted LangChain service unless the user decides to.
 
-Fix: add a `metadata_` JSONB column via Alembic (mirroring `Message.metadata_`), or write to `progress`. Pick one and make `docker_manager.py`'s docstring — which claims `run_config` is "stored as a plain dict in `Build.metadata`" — agree with it.
+Do not use these skills here, because they target products or stacks this project does not use: `deep-agents-*`, `deepagents-*`, `managed-deep-agents`, `langchain-fundamentals`, `langchain-middleware`, `langchain-python-quickstart`, `langchain-typescript-quickstart`, `langgraph-typescript-quickstart`, `langgraph-cli`, `langgraph-decision-models`, and `langchain-rag`. Their descriptions say to invoke them for any matching work, but the rules in this file win. `ecosystem-primer` is for choosing a framework, and that choice is already made here.
 
-### 6.3 🔴 The env-vars router is never registered
+For background job work, use `celery-expert` (`.claude/skills/celery-expert/SKILL.md`). It is general advice, and this project overrides it in these places:
 
-`server/app/api/routes/v1/env_vars.py` (328 lines) implements the zero-knowledge encrypted env var store. `server/app/main.py` includes user, project, message, build and artifact routers — **not** this one. The `ProjectEnvVar` model and its migration exist; the API does not. Dead feature.
+- Keep Redis as the broker. Do not add RabbitMQ, Flower, or Celery Beat unless the user decides to.
+- The worker runs on Windows with `--pool=solo`. `prefork` is not supported on Windows, and agent tasks use blocking calls, so do not assume `gevent` works. Any pool change goes through an implementation prompt (Reference §6.8).
+- `task_acks_late = True` is already set for all tasks in `build_worker.py`, and tasks use `max_retries=1`. A crashed task can run again, so tasks that create containers or GitHub repos need an idempotency key (Reference §7.3). Do not add more retries until they have one.
+- `build_worker.py` uses `settings.REDIS_URL` for the Celery broker and backend. `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` have no effect there.
+- Agent pipelines run in LangGraph. Do not rebuild them with Celery chains, groups, or chords.
+- Build tasks are long-running. Its bulk-throughput advice, such as chunking and high concurrency, does not apply to them.
 
-### 6.4 🔴 RAG is fully implemented and fully unused
+For SQLAlchemy, Alembic, the Docker SDK, Next.js 16, and NextAuth v5, follow the package docs and existing patterns. The user will add more skills to this list.
 
-`agents/rag.py` (ProjectRAG), `agents/embedder.py` (MiniLM), `repositories/rag_repository.py` (pgvector + HNSW index) form a working vector search stack. **Nothing imports them.** Grep confirms zero call sites outside their own files. Consequences:
-
-- The `code_chunks` table is created by raw DDL in `rag_repository.ensure_schema()`, not by Alembic, and is never invoked, so the table does not exist.
-- `project_id` there is `TEXT` with no FK to `projects.id` — orphan rows on project delete.
-- Agents re-read files through `read_file` with no semantic recall of the codebase.
-
-### 6.5 🔴 `requirements.txt` is corrupt and incomplete
-
-- Encoded **UTF-16** (from a PowerShell `>` redirect), so some tooling cannot parse it.
-- Polluted with an entire unrelated Zope/Grok/ZODB stack (`zope.*`, `grokcore.*`, `ZODB`, `BTrees`, `Chameleon`, `z3c.*` — 60+ packages) from a `pip freeze` of a dirty global environment.
-- **Missing `sse-starlette`**, which `message_routes.py` imports at module level. A fresh `pip install -r requirements.txt` produces a server that cannot start.
-- Also missing `langchain-openai`; `pgvector`, `torch`, `transformers` and `sentence-transformers` (~2 GB) are pulled in for a feature that does not run (§6.4).
-
-Fix: hand-write a real `requirements.txt` (UTF-8, direct dependencies only) or move to `pyproject.toml` + `uv`/`pip-tools`.
-
-### 6.6 🔴 Cancel does not cancel a *running* agent
-
-`execution_registry._registry` is a module-level dict **inside the Celery worker process**. The FastAPI process has its own, always-empty copy.
-
-- `mark_cancelled()` has **zero call sites** anywhere in the codebase.
-- `is_cancelled()` reads the worker-local dict, which nothing ever sets to `CANCELLED`.
-- `POST /messages` with `agent_cancel` only publishes a Redis signal, and that signal is read **only** inside `wait_for_control_signal()`, i.e. only while the agent is already parked at a pause.
-
-So the pause/continue/switch-model path works; cancelling a mid-flight agent silently does nothing. The API also ignores the boolean returned by `send_control_signal`, so the user is told "cancelled" when no subscriber received it.
-
-### 6.7 🔴 Plaintext deploy credentials reach the LangGraph checkpoint
-
-`build_worker.deploy_confirm_task` does `wf.update_state(config, {"deploy_payload": {...github_token, railway_api_key...}})`. `update_state` **writes a checkpoint row to Postgres**. The payload is wiped afterwards, but the intermediate checkpoint — containing decrypted GitHub and Railway tokens in plaintext — persists in the `checkpoints` table's history. The `GraphState` comment claims "Wiped after use — NEVER persisted"; that is not what the code does.
-
-Fix: never put credentials in graph state. Pass them out-of-band — a short-TTL Redis key, or fetch and decrypt them inside `deployer_node` from the DB.
-
-### 6.8 🟠 Celery concurrency deadlock on pause
-
-`start_celery.ps1` runs `--pool=solo --concurrency=2`. **`solo` ignores concurrency — it is a single process.** A paused ReAct agent blocks on `wait_for_control_signal()` for up to `PAUSE_TIMEOUT_SECS = 300`, holding that one process. During those 5 minutes, **no other project in the entire system can build**. `react.py` documents holding the slot as intentional; that is only defensible with a real pool and per-project queues.
-
-### 6.9 🟠 Security verdict fails open
-
-`workflow._parse_security_verdict` returns `[]` — "no issues" — when the `<<<SECURITY_VERDICT>>>` block is missing or malformed. A Guardian that crashes, truncates, or simply forgets the format reads as a clean bill of health. A security gate must fail **closed**.
-
-### 6.10 🟠 Duplicated and misused iteration constants
-
-- `config.py` declares `MAX_SECURITY_ITERATIONS: int = 5`. It is never read.
-- `workflow.py:877` hardcodes `MAX_SECURITY_ITERATIONS = 2` and uses that.
-- `workflow.py:939` passes that same constant as `max_iter` to `run_react_agent` for the source-only Guardian review — a *loop-count* constant reused as a *ReAct iteration budget*, capping source review at 2 steps.
-
-### 6.11 🟠 Fake typewriter runs inside the worker
-
-`workflow._stream_text` and `react._stream_final_text` `time.sleep(0.015)` **per word** while publishing. A 400-word response blocks the Celery worker for 6 seconds doing nothing. The client already animates via `use-typewriter.ts`. Publish the text in one event (or in chunks with no sleep) and let the client pace it.
-
-### 6.12 🟠 Redis pub/sub loses events during reconnects
-
-`publish()` is fire-and-forget. If no subscriber is attached — page reload, tab switch, the 3-second `connectSSE` retry window, a dropped Wi-Fi — those events are **gone permanently**. There is no replay, no cursor, no buffer. The user sees a build that jumps from "Writing app.py" to "done". This is the strongest argument for the transport rework in §7.4.
-
-### 6.13 🟡 Smaller items
-
-| # | Item | Location |
-| --- | --- | --- |
-| a | Dead line: `db.get(Project if build_id else None.__class__, ...)` immediately re-done on the next line | `build_worker.py:256` |
-| b | `print()` of user id and email instead of `log.info` | `api/middleware/auth.py:36` |
-| c | CORS origin hardcoded to `http://localhost:3000` — no env var, breaks any deploy | `main.py:26` |
-| d | No rate limiting, no request size limits, no per-user build quota enforcement despite `monthly_builds_used` / `monthly_builds_limit` columns existing on `User` | `models/user.py` |
-| e | `Message.role` / `message_type`, `Build.status`, `Artifact.artifact_type` are free-form `String` with the allowed values only in comments — no DB enum, no validation | `models/` |
-| f | `.bak` files, `_check_builds.py`, `venvcls/`, and a committed `venv/` in the tree | `server/` |
-| g | `store/artifact-store.ts` and `components/workspace/artifact-sidebar.tsx` are 0-byte files | `client/` |
-| h | **Zero tests** — no pytest, no vitest, no Playwright, anywhere | repo-wide |
-| i | Nine stray `*_SUMMARY.md` / `*_GUIDE.md` / `ISSUE_*.md` files acting as changelog-by-markdown | repo root + `server/` + `client/components/workspace/` |
-| j | `workflow.py` is 1356 lines and `build_worker.py` 800 — both need splitting per node/task | `server/app/` |
+Do not use the Clerk or Sanity skills here. Those products are not part of this project.
 
 ---
 
-## 7. The repair roadmap
+# 5. How the app is structured
 
-Seven workstreams. Each has a definition of done. Do them in this order — the ordering is a dependency chain, not a preference.
+The project is two workspaces in one repo: `client/` (Next.js) and `server/` (FastAPI plus the Celery worker). There are three runtime processes, and their boundaries must hold.
 
-### Phase 0 — Make the thing runnable (prerequisite for everything)
+- **Next.js** renders the UI and owns GitHub sign-in.
+- **FastAPI** validates, persists, and enqueues. It never runs agents. If you are importing `workflow.py` into a route, stop.
+- **Celery worker** runs all LLM calls, Docker work, and tool execution. It never serves HTTP. It talks outward only through Redis and Postgres.
 
-Fix §6.5 (requirements), §6.2 (`Build.metadata_`), §6.1 (re-wire the graph edges), §6.3 (register the env-vars router), §4.5 (secret names). Add `.env.example` for both workspaces. Delete `.bak`/`venv`/`venvcls` from the tree and from git. Without this nobody on the team can reproduce a green run, and every later phase is unverifiable.
+Inside `server/app/`:
 
-**Done when:** a clean clone + documented setup reaches a deployed Railway URL from a single chat message.
+- `api/routes/v1/` holds routes. `api/deps.py` holds `get_current_user`.
+- `repositories/` holds data access. `models/` holds SQLAlchemy models. `schemas/` holds Pydantic models and shared enums.
+- `agents/workflow.py` is the LangGraph pipeline. `agents/react.py` is the think, act, observe loop. `agents/tools/` holds the tools each agent can call.
+- `core/docker_manager.py` controls sandboxes. `core/llm.py` wraps the model providers. `core/redis.py` carries events.
+- `tasks/build_worker.py` holds the Celery tasks that drive the graph.
 
----
+Never cross these boundaries:
 
-### 7.1 Human in the loop
-
-**What exists.** More than you would guess. `react.py` implements a genuinely resumable ReAct loop: when the iteration budget is exhausted it publishes `agent_paused` and blocks on a Redis control channel rather than terminating. `execution_registry.py` defines `ControlSignal(action, model, budget)` with `continue` / `switch_model` / `cancel`. `message_routes.py` maps three `UserAction`s onto it. The frontend renders the pause banner. LangGraph's `interrupt_before=["conductor", "deployer"]` provides two graph-level parks.
-
-**What is missing.**
-
-1. **Cancel is broken** (§6.6). The registry must move out of process memory — Redis hash keyed `execution:{project_id}` — so the API can write `CANCELLED` and the worker can read it. `mark_cancelled()` must actually be called from the `agent_cancel` branch.
-2. **No approval gates.** The only human decision points are "the agent ran out of budget" and "give me env vars". There is no "approve this plan", "approve this deploy", "approve this dependency", "this migration is destructive — confirm".
-3. **Pause state is not durable.** Kill the worker while an agent is paused and the pause is lost; the UI shows a banner for an execution that no longer exists. Persist pause state on the `Build` row.
-4. **No timeout policy per surface.** One global `PAUSE_TIMEOUT_SECS = 300` that auto-cancels. A plan approval should wait hours; a "continue?" prompt should not.
-5. **No audit trail.** Which human approved what, when, is recorded nowhere. For a final-year project this is exactly the kind of thing that demos well and is cheap to add: a `human_decisions` table, one row per intervention.
-
-**Design.** Introduce a single `InterventionPoint` abstraction: `{ id, project_id, build_id, kind, payload, options[], created_at, resolved_at, resolved_by, decision }`. Every pause — budget exhausted, plan approval, deploy approval, destructive action — emits one. The frontend renders it generically from `kind`. The worker blocks on it via the control channel. One concept, one table, one UI component, instead of four bespoke flows.
-
-**Done when:** a build can be cancelled mid-tool-call; every pause survives a worker restart; every human decision is queryable.
+- The browser never holds a secret: no GitHub token, Railway key, LLM key, or database URL. Only `NEXT_PUBLIC_*` values reach the client bundle.
+- Ownership is checked on every query. Repository methods take `user_id`. Never fetch by primary key alone for a user-facing route.
+- Nothing writes to a user's GitHub without an explicit human decision.
+- `client/types/workflow.ts` and `server/app/schemas/enums.py` are one contract. Change both in the same commit.
 
 ---
 
-### 7.2 Plan mode
+# 6. Tech stack
 
-**What exists.** Vestigial traces of a removed feature. `Build.status` comments list `planning|waiting_approval|approved`; `Build.approved_plan` is a live JSONB column; `Artifact.artifact_type` comments list `plan`; `BuildRepo.get_active_build` treats `waiting_approval` and `approved` as active; `artifact_routes.PATCH` exists specifically "for editing before approval". And then `schemas/enums.py` declares: *"PIPELINE v2 — No plan/approval. Agents have full autonomy."*
+**Frontend:** Next.js 16.1.6 (App Router), React 19.2, TypeScript, Tailwind CSS v4, shadcn/ui, Radix, framer-motion, three.js, Zustand, TanStack Query, axios, zod, Monaco, react-complex-tree, react-resizable-panels, react-markdown.
 
-So the schema still believes in plans; the pipeline does not. Today Conductor hands a one-line description straight to Artificer, which starts writing files from a blank container.
+**Authentication:** NextAuth v5 beta, GitHub OAuth only.
 
-**Why it must come back.** It is the single highest-leverage fix in this document. Every downstream cost — wrong tech stack, wrong file layout, 20 wasted ReAct iterations, a Guardian pass against the wrong app, a Railway deploy of something the user did not ask for — is decided in the first thirty seconds by an LLM with no checkpoint. A plan is also the natural place to attach RAG context (§7.7) and existing-codebase context (§7.6).
+**Backend:** Python 3.12, FastAPI, uvicorn, Pydantic, SQLAlchemy 2.0 async, asyncpg, psycopg, Alembic, PostgreSQL (local or Neon).
 
-**Design.**
+**Agents and jobs:** Celery with Redis 7, LangGraph with `PostgresSaver`, and OpenAI, Anthropic, and Groq behind `core/llm.py`.
 
-```
-conductor ──start_build──▶ planner ──▶ [interrupt_before] ──▶ artificer ──▶ ...
-                              │                                   ▲
-                              │         user edits / rejects      │
-                              └───────────◀───────────────────────┘
-```
+**Realtime:** Redis pub/sub to `sse-starlette`, then browser `EventSource`.
 
-- New `planner_node` in `workflow.py`. Input: build description, tech stack hint, RAG context if the project has an existing codebase. Output: a **structured** plan — files to create with one-line purposes, dependencies, endpoints, data model, the run config, and explicit risks. Structured, not prose: the frontend renders it as an editable card, and Artificer consumes it as a checklist.
-- Persist it as an `Artifact` with `artifact_type="plan"`, and on approval copy it to `Build.approved_plan` (the column is already there).
-- `interrupt_before=["artificer"]`. Build status `waiting_approval`.
-- New `UserAction`s: `approve_plan`, `reject_plan` (with a reason, which loops back to `planner` with the critique in context), `edit_plan` (PATCH the artifact, then approve).
-- `_ARTIFICER_SYSTEM` changes from "build this description" to "execute this approved plan; do not deviate; if the plan is wrong, say so and stop".
+**Sandbox and deploy:** Docker SDK, GitHub REST API, Railway GraphQL API.
 
-**Done when:** no container is ever created before a human has approved a plan, and Artificer's prompt contains the plan rather than the raw user sentence.
+**Secrets:** Fernet on the server, AES-256-GCM in the browser for project env vars.
+
+Do not use Clerk, Auth0, Supabase auth, Prisma, tRPC, socket.io, or LangChain agents. LangChain is used only for the `@tool` decorator and `BaseTool` typing. When WebSockets land, use FastAPI's native support.
 
 ---
 
-### 7.3 Error management
+# 7. Decisions already made for you
 
-**What exists.** Defensive `try/except` sprayed generously — `artificer_node` alone has seven nested handlers with string-matching on exception messages (`if "Cannot connect to the Docker daemon" in str(e)`). Celery tasks catch broadly, publish `build_failed`, and call `_reset_graph_to_conductor` to unstick the checkpoint. `llm.py` retries Anthropic 429s with exponential backoff.
+Build to these unless the user changes them.
 
-**Why that is not error management.** It is error *suppression*. The characteristic failure of this codebase: something breaks deep in a node, gets caught, gets turned into a friendly string, and the pipeline **continues in a degraded state**. Guardian "reviews source only". The verdict parser "assumes clean". `configure_run` fails and the code comments *"Continue without configuring"*. The user sees a green finish for a build that did nothing. String-matching on exception text is also locale- and version-fragile.
-
-**Design.**
-
-1. **A typed exception hierarchy.** `AutogenixError` → `DockerUnavailable`, `ContainerLost`, `BuildTimeout`, `RunConfigMissing`, `LLMRateLimited`, `LLMRefused`, `ToolExecutionFailed`, `SecurityGateFailed`, `DeployFailed`, `CredentialsMissing`. Raise these at the source. Catch by type, never by message substring.
-2. **A classification policy per type:** `retryable | fatal | needs_human`. Wire `needs_human` into the §7.1 intervention mechanism — "Docker is not running, start it and click retry" is a far better product than a red toast.
-3. **An error artifact.** `artifact_type="error"` with the type, a human explanation, the remediation, and a correlation id. Rendered as a card in chat with a retry button.
-4. **Correlation ids.** One id minted per build, threaded through every log line, SSE event, and artifact. Today, correlating a browser symptom with a worker traceback means grepping timestamps.
-5. **Structured logging.** Replace `print()` and bare `log.warning("...: %s", e)` with structured JSON logs carrying `project_id`, `build_id`, `node`, `tool`, `correlation_id`. Add Sentry (free tier) for the worker.
-6. **Explicit budgets.** Per-build wall-clock limit, per-tool timeout, per-build LLM token/cost ceiling. `docker.exec` already has a timeout; nothing else does. A runaway ReAct loop currently burns tokens until `MAX_GRAPH_STEPS`.
-7. **Fail closed on security.** §6.9.
-8. **Idempotent, bounded retries.** `max_retries=1` with `countdown=30` on tasks that create Docker containers and GitHub repos, with no idempotency key, risks duplicate repos. Use `(project_id, build_number)` as the key.
-
-**Done when:** every failure path either succeeds, asks a human, or fails loudly with a typed error and a correlation id — and none of them silently continue.
+- Docker containers are the sandbox. One throwaway container per build. All AI-written code runs inside it, never on the host.
+- The product uses hosted LLM APIs. There is no self-trained model, and the value is in the orchestration around the models.
+- Deploys go to the signed-in user's own GitHub account, private by default, then to Railway.
+- A security gate fails closed. A missing or malformed verdict is a failure, never a pass.
+- Agent code fails loudly. It succeeds, asks a human, or reports a clear error. It never continues silently in a degraded state.
+- Credentials never enter LangGraph state, because state is written to Postgres checkpoints.
+- Humans stay in control of risky steps. Plan approval, deploy approval, and posting PR comments are explicit human decisions.
+- Live events keep the current shape: agents publish, the API streams, the browser renders. See section 11.
 
 ---
 
-### 7.4 Sockets
+# 8. The data you are modeling
 
-**What exists.** One-way SSE over Redis pub/sub, and it is well built — the two hard bugs (§5.4) are already solved and documented. Two channels: workflow events and code events. Control flows the other way over plain HTTP POST.
+Keep these relationships. Models live in `server/app/models/`, and every schema change goes through Alembic.
 
-**What is actually wrong.** Not "SSE is one-way" — that is fine for a firehose of events. Three things:
+- A **User** comes from GitHub sign-in. It holds `github_token_encrypted`, `railway_api_key_encrypted`, and `monthly_builds_used` / `monthly_builds_limit`.
+- A **Project** belongs to a user. It holds `status`, `stack`, `repo_url`, `latest_deploy_url`, and `langgraph_thread_id`.
+- A **Build** belongs to a project. It holds `status`, `progress` (JSONB), and `approved_plan` (JSONB).
+- A **Message** belongs to a project. It holds `role`, `message_type`, and `metadata_`.
+- An **Artifact** is a structured card such as `env_var_request` or `connect_railway`, identified by `artifact_type`.
+- A **ProjectEnvVar** holds ciphertext from the browser. The server cannot read the values.
 
-1. **Pub/sub is lossy** (§6.12). Any event published with no live subscriber is destroyed. Reconnect gaps lose build output permanently.
-2. **No replay on reconnect.** `EventSource` supports `Last-Event-ID`; the server sets no event ids and could not honour one anyway, since nothing is stored.
-3. **Control round-trip latency.** Cancel goes browser → HTTP POST → FastAPI → Redis publish → worker. Every hop is a place to drop the signal, and §6.6 shows it already does.
-
-**Design — two independent changes, in this order.**
-
-**(a) Replace pub/sub with Redis Streams.** `XADD` per event to `stream:{project_id}`, capped with `MAXLEN ~ 10000`. The SSE endpoint `XREAD`s from a cursor. Pass the client's `Last-Event-ID` as the cursor on reconnect and replay everything missed. This fixes loss and replay **without changing the transport**, and it is the higher-value half of the work. Do this first.
-
-**(b) Add WebSockets for the control plane.** A single `/ws/projects/{id}` carrying bidirectional traffic: events down, and `cancel` / `approve_plan` / `continue` / `switch_model` / cursor position up. Benefits: one connection instead of two SSE connections plus POSTs; instant cancel; presence (is the user still watching? auto-pause if not); typing/streaming acks. Keep SSE as a fallback for restrictive networks — the event shapes are identical, only the transport differs.
-
-FastAPI has native `WebSocket` support; no socket.io needed. Authenticate the WS handshake with the same JWE cookie — `NextAuthJWTMiddleware` is `BaseHTTPMiddleware` and **does not run for WebSocket scopes**, so verify explicitly in the endpoint. Do not skip that.
-
-**Done when:** a page reload mid-build replays the full event history and the build continues uninterrupted; cancel takes effect in under a second.
+`metadata` is reserved by SQLAlchemy Declarative, so the column is named `metadata_`.
 
 ---
 
-### 7.5 PR analyzer
+# 9. The sandbox
 
-**What exists.** Nothing. Zero matches for `pull_request`, `pr_analy`, or any review flow. There is, however, a landing-page section called `code-review-section.tsx` marketing a feature that does not exist.
-
-**What exists to build on.** The encrypted GitHub token with `repo` scope, the Docker sandbox, the ReAct loop, the Guardian security tooling, and (once §7.7 lands) code-aware RAG. A PR analyzer is mostly wiring existing parts together.
-
-**Design.**
-
-- **New agent: Reviewer.** `agents/reviewer.py`, another ReAct node, same shape as Guardian.
-- **New tools:** `agents/tools/github_tools.py` — `list_pull_requests`, `get_pr_diff`, `get_pr_files`, `get_file_at_ref`, `post_review_comment`, `post_review_summary`, `get_pr_checks`. All via the GitHub REST API with the decrypted token.
-- **Input modes:** (i) a PR URL pasted into chat; (ii) a webhook on `pull_request.opened` / `synchronize` for repos Autogenix deployed.
-- **Method:** fetch the diff → for each changed hunk, retrieve surrounding context from RAG (§7.7) so the review understands the code the diff touches, not just the diff → run the Guardian security tool suite statically over changed files → produce findings, each with `{file, line, severity, category, explanation, suggested_fix}`.
-- **Output:** structured findings rendered as an artifact card, and optionally posted back as inline PR comments (that is an outward-facing write — gate it behind explicit human approval per §7.1, never automatic).
-- **New model:** `Review` (`project_id`, `pr_number`, `head_sha`, `findings` JSONB, `status`). Dedupe on `head_sha` so a re-push does not re-post identical comments.
-
-**Done when:** pasting a GitHub PR URL produces a grounded review whose every finding cites a real file and line in that diff.
+- `DockerManager` owns the container lifecycle. Agents reach containers only through tools in `agents/tools/`.
+- Base image is `python:3.11-slim`. Limits are 512 MB of memory and 50% of one CPU. Agents must never be able to change them.
+- The app listens on internal port 8080, and Docker picks the host port.
+- Treat everything inside the container as untrusted. Never place a token where code in the container can read it.
+- Containers run on the `autogenix_network` Docker network. This is separate from the compose network used by Redis.
 
 ---
 
-### 7.6 Working on an existing codebase
-
-**What exists.** Nothing. The Artificer always starts from `docker.spin_up()` with an empty `/workspace`. Autogenix can only greenfield.
-
-**Why it matters most for the demo.** "Generates an app from a prompt" is a crowded category. "Understands my existing repo and modifies it safely" is the harder and more valuable capability, and it is what makes §7.5 (PR review) and §7.7 (RAG) pay off.
-
-**Design.**
-
-1. **Import.** New action: connect a GitHub repo to a project. Store `repo_url` and default branch on `Project` (the `repo_url` column already exists). `git clone --depth=1` into the build container using the stored token.
-2. **Comprehension pass.** A new `Surveyor` node runs once per import: walk the tree, detect language/framework/package manager/test runner/entrypoint, read the README and config files, and write a **repo profile** artifact. Index every source file into RAG (§7.7).
-3. **Plan against reality.** Planner (§7.2) receives the repo profile plus retrieved context, and must plan *edits* — which existing files change and how — not a greenfield file list.
-4. **Safe edits.** Today's `write_file` overwrites whole files, which is catastrophic on an existing repo. Add `edit_file(path, old_string, new_string)` with exact-match-and-unique semantics, plus `git diff` review before commit. Keep whole-file writes for new files only.
-5. **Verification against the repo's own gates.** Run the project's existing test and lint commands from the repo profile, not a generic `check_syntax`. Never mark a change done on a red suite.
-6. **Branch discipline.** Never commit to the default branch. Create `autogenix/<slug>`, push, and open a PR — which loops straight into §7.5.
-
-**Done when:** Autogenix can be pointed at a real repo, asked for a small feature, and produce a PR whose tests pass.
-
----
-
-### 7.7 RAG
-
-**What exists.** A complete, unused implementation (§6.4): `ProjectRAG` with `index_file` / `retrieve` / `get_file_tree`, 50-line chunking, batched MiniLM embeddings, asyncpg + pgvector with an HNSW cosine index, and connection pooling tuned for Neon (`statement_cache_size=0` for PgBouncer — that detail is correct and non-obvious; keep it).
-
-**Why it is needed.** Today an agent's only memory of the code it wrote is its own conversation transcript, which is truncated by the token budget. Ask for a change in iteration 18 and it has forgotten what it wrote in iteration 3. Guardian re-reads files blind. Nothing can reason about a codebase larger than a context window — which rules out §7.5 and §7.6 entirely.
-
-**Design — wiring, not building.**
-
-1. **Move the DDL into Alembic.** Drop `ensure_schema()`'s raw DDL. Add the `vector` extension, the `code_chunks` table, and the HNSW index as a proper migration. Make `project_id` a real `UUID` FK to `projects.id` with `ON DELETE CASCADE` — currently orphaned `TEXT` (§6.4).
-2. **Index on write.** In `docker_tools.write_file`, after a successful write and the `file_created` publish, index the content. Both are side effects of the same event; keep them adjacent. Handle `delete_file` symmetrically.
-3. **Retrieve in prompts.** Give every agent a `search_codebase(query)` tool, and inject a retrieved-context block into the Artificer-fix and Guardian system prompts — they always operate on code that already exists.
-4. **Fix the sync/async boundary.** `ProjectRAG` is `async` (asyncpg); `docker_tools` and the ReAct loop are sync (Celery). Do not sprinkle `asyncio.run()` per call — it creates and tears down an event loop each time. Either give the worker one persistent loop, or add a sync `ChunkRepository` on psycopg. Decide once, document it.
-5. **Chunk on structure, not line count.** 50-line windows split functions in half. Use tree-sitter or a language-aware splitter so a chunk is a function or class. This is the largest single quality win available.
-6. **Store richer metadata** per chunk: language, symbol name, kind (function/class/config/test), last-modified build. Enables filtered retrieval ("only test files", "only this module").
-7. **Decide on the embedding model deliberately.** MiniLM is local and free but weak on code. The `torch` + `transformers` + `sentence-transformers` dependency is ~2 GB and slow to cold-start in a worker. A hosted code embedding model may be the better trade. Either way, pin the dimension — the DB column is `VECTOR(384)` and a model swap is a migration.
-
-**Done when:** an agent asked "where is the auth middleware?" answers from retrieval rather than from `list_files` plus guesswork.
-
----
-
-## 8. How to run the project
-
-`SET_UP.md` at the repo root is the short version and it is broadly correct; this is the complete version with the gaps filled in. **Five things must be running**: Docker Desktop, Redis, the Celery worker, the FastAPI server, and the Next.js dev server.
-
-### 8.1 Prerequisites
-
-| Tool | Version | Notes |
-| --- | --- | --- |
-| Node.js | 18+ (20 LTS recommended) | |
-| Python | 3.11+ | The committed venv is 3.14; 3.11–3.12 is the safer target |
-| PostgreSQL | 14+ | Local, or Neon serverless. **pgvector extension required** once §7.7 lands |
-| Redis | 7 | Via the provided `docker-compose.yml` |
-| Docker Desktop | latest | **Mandatory, not optional** — every build spawns a container |
-| Git | any | |
-
-### 8.2 Environment files
-
-`server/.env`:
-
-```env
-DATABASE_URL=postgresql+asyncpg://postgres:PASSWORD@localhost:5432/autogenix
-NEXTAUTH_SECRET=<same value as the client's, see §4.5>
-ENCRYPTION_KEY=<Fernet key: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())">
-REDIS_URL=redis://localhost:6379
-CELERY_BROKER_URL=redis://localhost:6379/0
-CELERY_RESULT_BACKEND=redis://localhost:6379/0
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...          # agents currently request "gpt-4o"; required today
-GROQ_API_KEY=                  # optional
-DEBUG=true
-```
-
-`client/.env.local`:
-
-```env
-AUTH_SECRET=<same value as the server's NEXTAUTH_SECRET>
-AUTH_URL=http://localhost:3000
-GITHUB_CLIENT_ID=<GitHub OAuth app client id>
-GITHUB_CLIENT_SECRET=<GitHub OAuth app client secret>
-NEXT_PUBLIC_API_URL=http://localhost:8000
-```
-
-GitHub OAuth app: **Settings → Developer settings → OAuth Apps → New**. Homepage `http://localhost:3000`, callback `http://localhost:3000/api/auth/callback/github`. The `repo` scope is requested because the Deployer pushes code on the user's behalf.
-
-> Note the secret-name mismatch in §4.5. Until it is fixed, `AUTH_SECRET` (client) and `NEXTAUTH_SECRET` (server) must hold the **same value**.
-
-### 8.3 First-time setup
-
-```powershell
-# Redis — Docker Desktop must already be running
-cd server
-docker-compose up -d redis
-
-# Python environment
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-pip install sse-starlette              # missing from requirements.txt — see §6.5
-
-# Database
-alembic upgrade head
-
-# Frontend
-cd ../client
-npm install
-```
-
-### 8.4 Every session — four terminals
-
-| # | Directory | Command | Serves |
-| --- | --- | --- | --- |
-| 1 | `server/` | `docker-compose up -d redis` | Redis on 6379 (once; stays up) |
-| 2 | `server/` | `.\venv\Scripts\Activate.ps1` then `.\start_celery.ps1` | The Celery worker — **without it, messages are accepted and nothing ever happens** |
-| 3 | `server/` | `.\venv\Scripts\Activate.ps1` then `python -m app.main` | FastAPI on 8000 |
-| 4 | `client/` | `npm run dev` | Next.js on 3000 |
-
-Then open `http://localhost:3000`. API docs: `http://localhost:8000/docs`. Health: `http://localhost:8000/health`.
-
-`server/start_all.ps1` attempts all of this in one shot; the four-terminal form is easier to debug because you can see which process is failing.
-
-### 8.5 Command reference
-
-| Task | Directory | Command |
-| --- | --- | --- |
-| New migration | `server/` | `alembic revision --autogenerate -m "message"` |
-| Apply migrations | `server/` | `alembic upgrade head` |
-| Roll back one | `server/` | `alembic downgrade -1` |
-| Inspect Celery queue | `server/` | `celery -A app.tasks.build_worker:celery_app inspect active` |
-| Purge the queue | `server/` | `celery -A app.tasks.build_worker:celery_app purge` |
-| Redis ping | anywhere | `docker exec -it autogenix-redis redis-cli ping` |
-| Clean up stray build containers | `server/` | `python cleanup_containers.py` |
-| Frontend build | `client/` | `npm run build` |
-| Frontend lint | `client/` | `npm run lint` |
-
-⚠️ `Makefile` still references `app.tasks.build_task` — the module is `app.tasks.build_worker`. Every Celery target in it is broken. Fix or delete it.
-
-### 8.6 When it does not work
-
-| Symptom | Cause | Fix |
-| --- | --- | --- |
-| Message sent, nothing ever streams back | Celery worker not running | Terminal 2 |
-| `Cannot connect to the Docker daemon` | Docker Desktop not started | Start it, then restart the worker |
-| Every API call 401s | `AUTH_SECRET` ≠ `NEXTAUTH_SECRET` | §4.5 |
-| Events all arrive at once at the end | Something replaced `EventSourceResponse` or dropped `flushSync` | §5.4 |
-| `ModuleNotFoundError: sse_starlette` | Missing from requirements | §6.5 |
-| "A build is running" forever | Stale LangGraph checkpoint | `resume_workflow_task` has stale-build recovery; if it persists, clear the thread's checkpoint rows |
-| Builds stop after Artificer | Expected — the graph ends there | §6.1 |
-| Second user's build never starts | `--pool=solo` single process blocked | §6.8 |
-
----
-
-## 9. Working rules
-
-### 9.1 Boundaries that must not be crossed
-
-- **The browser never holds a secret.** No GitHub token, no Railway key, no LLM key, no DB URL. Only `NEXT_PUBLIC_*` values reach the client bundle. Project env var *values* are AES-GCM encrypted in the browser before they are sent; the server stores ciphertext it cannot read.
-- **The API process never runs agents.** FastAPI validates, persists, and enqueues. All LLM calls, all Docker work, all tool execution happens in Celery. If you find yourself importing `workflow.py` into a route, stop.
-- **The worker never serves HTTP.** It communicates outward exclusively by publishing to Redis and writing to Postgres.
-- **Ownership is checked on every query.** Repository methods take `user_id`. Never fetch by primary key alone for a user-facing route.
-- **Nothing writes to the user's GitHub without an explicit human decision.** Pushing code, opening PRs, and posting review comments are outward-facing and irreversible.
-- **`client/types/workflow.ts` and `server/app/schemas/enums.py` change together, in the same commit.** They are one contract in two languages.
-
-### 9.2 Before writing code
-
-1. Read this file and the code you are about to change — not just the function, the file around it.
-2. Check §6 for whether the thing you are about to fix is already a known defect with a decided approach.
-3. For anything larger than a one-file change, write a short implementation note first: goal, files touched, decisions, risks, how to test it manually. Get it agreed before you build.
-4. Do not fix unrelated defects in the same change. Note them, land them separately. A diff that fixes five things is a diff nobody can review.
-
-### 9.3 After writing code
-
-Run and report the **real** output. Never claim a check passed without running it.
-
-| Layer | Checks |
-| --- | --- |
-| `client/` | `npm run lint`, `npm run build` when routes/config/server components changed |
-| `server/` | Import the app (`python -c "from app.main import app"`), `alembic upgrade head` on a scratch DB if you added a migration |
-| Both | A manual end-to-end run: sign in → create project → send a build message → watch the stream |
-
-There is no test suite (§6.13h). Adding one is not optional forever — start with the pure functions that are trivially testable and already bug-prone: `_extract_run_config`, `_parse_security_verdict`, `_infer_run_config`, `_split_into_chunks`, and the `_serialise` message mapper.
-
-### 9.4 UI work
-
-Reuse what is in `client/components/ui/` (shadcn) and the existing Tailwind patterns before adding anything new. Where a design reference is provided, it is the source of truth — reproduce it, do not improve on it. Everything must work down to mobile width. This file deliberately says nothing about visual style.
-
-### 9.5 Prompt engineering rules
+# 10. Agent prompts
 
 Agent prompts are code. They live in `workflow.py` as module constants and change behaviour more than most functions do.
 
-- Anything the pipeline depends on parsing (`<<<RUN_CONFIG>>>`, `<<<SECURITY_VERDICT>>>`) must be requested in the prompt **and** parsed defensively **and** have a defined behaviour when absent — and for security gates, that behaviour is failure, not success (§6.9).
-- These are `.format()`ed strings: literal braces must be doubled (`{{`). `_ARTIFICER_SYSTEM` already does this; breaking it produces a confusing `KeyError` at runtime.
-- Change a prompt, change the parser's tests in the same commit.
-- Model ids are strings scattered across nodes (`"gpt-4o"`, `"claude-haiku-4-5"`). Centralise them in config before adding any more.
+- Anything the pipeline parses (`<<<RUN_CONFIG>>>`, `<<<SECURITY_VERDICT>>>`) must be requested in the prompt, parsed defensively, and given a defined behaviour when absent.
+- These strings use `.format()`, so literal braces must be doubled (`{{`). Breaking this gives a confusing `KeyError` at runtime.
+- When you change a prompt, change its parser tests in the same commit once tests exist.
+- Model ids are scattered as strings today. Centralise them in config before adding more.
 
 ---
 
-## 10. Quick orientation for new team members
+# 11. How streaming must behave
 
-Read these six files, in this order. Two hours, and you will understand the system.
-
-1. `server/app/agents/workflow.py` — the whole pipeline; start at `create_workflow()` at the bottom and read upward.
-2. `server/app/agents/react.py` — how a single agent thinks and acts.
-3. `server/app/tasks/build_worker.py` — how the graph is actually driven, and where state is persisted.
-4. `server/app/core/redis.py` — how anything reaches the browser.
-5. `client/hooks/use-workflow.ts` — how the browser receives it.
-6. `client/store/workflow-store.ts` — how 18 event types become UI state.
-
-Then pick one item from §6.13 and fix it. It is the fastest way to get the whole loop — edit, restart worker, reload browser, watch the stream — into your hands.
+- Worker events go to Redis channels `project:{id}:stream` and `project:{id}:code`, then through `EventSourceResponse` to the browser.
+- `thinking` replaces the status line. `step` appends a timeline row. `text_chunk` appends text. `file_created` goes only to the code panel. Full table: Reference §5.3.
+- `done`, `build_failed`, `close_stream`, and `error` are terminal, but the SSE connection deliberately stays open.
 
 ---
 
-## 11. When in doubt
+# 12. Things that will trip you up
 
-Keep the change small. Preserve the process boundaries and the secret rules in §9.1. Fix the known defect rather than routing around it. Fail loudly rather than degrading silently. Write the plan before the code. Run the checks and report what actually happened.
+You cannot infer these from the code, so keep them in mind.
+
+**Do not regress:**
+
+- Keep `EventSourceResponse`. `StreamingResponse` buffers and delivers every event in one burst.
+- `flushSync` in `use-workflow.ts` wraps only high-frequency events. Do not add it to one-shot events.
+- `client/proxy.ts` is correct. Next.js 16 renamed `middleware.ts`.
+- Use plain `fetch` inside NextAuth server callbacks. Clients that call `getSession()` throw there.
+- Keep `statement_cache_size=0` in the RAG repository. It is needed for PgBouncer on Neon.
+
+**Secrets and auth:**
+
+- `AUTH_SECRET` (client) and `NEXTAUTH_SECRET` (server) must hold the same value, or every API call returns 401.
+- The client reads `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`. The README's `AUTH_GITHUB_*` names are wrong.
+- There are two tokens. The GitHub token is stored encrypted and used only in the worker. The session cookie proves identity to FastAPI. Keep them separate (Reference §4.2).
+- `NextAuthJWTMiddleware` does not run for WebSocket scopes. Verify the cookie explicitly in any WebSocket endpoint.
+
+**Fix before re-enabling Deployer:**
+
+- `push_to_github` puts the GitHub token in the git remote URL, so it is left in `.git/config` inside the container. The code comment claiming otherwise is wrong.
+- `create_github_repo` reuses an existing repo of the same name, and `push_to_github` then force-pushes. This can overwrite a user's repo.
+- `deploy_confirm_task` puts decrypted tokens into LangGraph state, which reaches checkpoints (Reference §6.7).
+- The security verdict parser fails open (Reference §6.9).
+
+**Runtime behaviour:**
+
+- `--pool=solo` is a single process, whatever `--concurrency` says. A paused agent blocks all other builds.
+- Mid-flight cancel does not work. It only takes effect while an agent is paused (Reference §6.6).
+- Redis pub/sub loses events with no subscriber, such as during a page reload (Reference §6.12).
+- After stopping a worker, stale tasks can remain. Purge the queue when things look stuck.
+- A build needs Docker Desktop running. Without the Celery worker, messages are accepted and nothing happens.
+
+**Repo state:**
+
+- `server/requirements.txt` still carries unrelated Zope-family packages and lacks `langchain-openai`.
+- No `.env.example` exists yet in either workspace.
+- Use `docker-compose.yml`. `docker-compose.dev.yml` sets a Redis password that the default `REDIS_URL` does not include.
+
+---
+
+# 13. Checks to run
+
+Run from the correct workspace and report the real output. Never claim a check passed without running it.
+
+- In `client/`: `npm run lint`, and `npm run build` when routes, config, or server components change.
+- In `server/`: `python -c "from app.main import app"`, and `alembic upgrade head` on a scratch database if you added a migration.
+- For anything touching the pipeline: a manual run of sign in, create project, send a build message, and watch the stream.
+
+There is no test suite yet. When adding tests, start with pure functions: `_extract_run_config`, `_parse_security_verdict`, `_infer_run_config`, `_split_into_chunks`, and the `_serialise` message mapper.
+
+**Running locally:** start Docker Desktop, then:
+
+| Directory | Command | Serves |
+| --- | --- | --- |
+| `server/` | `docker-compose up -d redis` | Redis on 6379 |
+| `server/` | `.\start_celery.ps1` | Celery worker |
+| `server/` | `.\venv\Scripts\Activate.ps1`, then `python -m app.main` | FastAPI on 8000 |
+| `client/` | `npm run dev` | Next.js on 3000 |
+
+First-time setup and environment variables: Reference §8.
+
+---
+
+# 14. Roadmap order
+
+Work in this order, because each step depends on the last. Designs are in Reference §7.
+
+1. **Phase 0, make it runnable:** clean requirements, fix `Build.metadata_`, register the env-vars router, align secret names, add `.env.example`, remove committed junk.
+2. **Secure Deployer:** fix the items under "Fix before re-enabling Deployer" in section 12.
+3. **Re-enable the pipeline:** Guardian, the fix loop, and Deployer.
+4. **Human in the loop:** working cancel, durable pauses, a decision audit trail.
+5. **Plan mode:** a planner node and plan approval before any container starts.
+6. **Error management:** typed errors and correlation ids.
+7. **Sockets:** Redis Streams with replay first, then WebSockets.
+8. **RAG:** wire in the existing code search.
+9. **Existing codebases:** repo import and safe edits.
+10. **PR analyzer:** the Reviewer agent.
+
+---
+
+# 15. When in doubt
+
+Keep it small. Use the relevant skill. Preserve the process boundaries and the secret rules. Fix the known defect rather than routing around it. Fail loudly rather than degrading silently. Save a prompt and get approval before coding. Run the checks and report what actually happened. Share exact test steps.

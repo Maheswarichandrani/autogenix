@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "celery-expert": {
+      "source": "martinholovsky/claude-skills-generator",
+      "sourceType": "github",
+      "skillPath": "skills/celery-expert/SKILL.md",
+      "computedHash": "07e93f2de797f82c58c2892f6af06b546204b5117b7443f682a24b9bcd805301"
+    },
+    "fastapi": {
+      "source": "fastapi/fastapi",
+      "sourceType": "github",
+      "skillPath": "fastapi/.agents/skills/fastapi/SKILL.md",
+      "computedHash": "ff680b56037089d5f4cb399af70b0f9efd3d332887be464db11864b14eb3ad93"
+    }
+  }
+}
