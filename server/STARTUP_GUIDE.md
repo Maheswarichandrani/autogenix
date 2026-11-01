@@ -102,7 +102,7 @@ cd E:\ALL-PROJECTS\Autogenix\server
 .\venv\Scripts\Activate.ps1
 
 # Start Celery worker
-celery -A app.tasks.build_task:celery_app worker --loglevel=info --pool=solo --concurrency=2
+celery -A app.tasks.build_worker:celery_app worker --loglevel=info --pool=solo --concurrency=2
 ```
 
 **Expected Output:**
@@ -200,7 +200,7 @@ pip install celery redis
 
 Use `--pool=solo` flag:
 ```powershell
-celery -A app.tasks.build_task:celery_app worker --pool=solo
+celery -A app.tasks.build_worker:celery_app worker --pool=solo
 ```
 
 ### Tasks Not Being Picked Up
@@ -212,7 +212,7 @@ docker ps | Select-String "redis"
 
 Check Celery can connect:
 ```powershell
-celery -A app.tasks.build_task:celery_app inspect ping
+celery -A app.tasks.build_worker:celery_app inspect ping
 ```
 
 ### Still No SSE Events
@@ -231,7 +231,7 @@ For production, use a process manager like **supervisord** or **systemd**:
 
 ```ini
 [program:celery_worker]
-command=/path/to/venv/bin/celery -A app.tasks.build_task:celery_app worker --loglevel=info --concurrency=4
+command=/path/to/venv/bin/celery -A app.tasks.build_worker:celery_app worker --loglevel=info --concurrency=4
 directory=/path/to/server
 user=autogenix
 autostart=true

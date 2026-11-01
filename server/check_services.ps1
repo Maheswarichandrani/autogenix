@@ -68,7 +68,7 @@ try {
         if ($LASTEXITCODE -eq 0) {
             Write-Host "✓ Celery is installed: $($celeryCheck -split "`n" | Select-Object -First 1)" -ForegroundColor Green
 
-            $workers = & $celeryPath -A app.tasks.build_task:celery_app inspect ping 2>&1
+            $workers = & $celeryPath -A app.tasks.build_worker:celery_app inspect ping 2>&1
 
             if ($workers -match "pong") {
                 Write-Host "✓ Celery worker is RUNNING and responding" -ForegroundColor Green

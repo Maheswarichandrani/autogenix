@@ -151,7 +151,7 @@ async def save_railway_key(
     active_project = result.scalar_one_or_none()
 
     if active_project and active_project.langgraph_thread_id:
-        from app.tasks.build_task import railway_connect_task
+        from app.tasks.build_worker import railway_connect_task
         railway_connect_task.delay(
             project_id = str(active_project.id),
             thread_id  = active_project.langgraph_thread_id,
@@ -297,7 +297,7 @@ async def deploy_confirm(
     - Never log body.plaintext_vars
     - Plaintext wiped from RAM after Celery task completes
     """
-    from app.tasks.build_task import deploy_confirm_task
+    from app.tasks.build_worker import deploy_confirm_task
 
     project = await ProjectRepo(db).get_by_id(project_id, current_user.id)
     if not project:

@@ -134,7 +134,7 @@ Use the `--pool=solo` flag (already in the script).
 
 ### Tasks still not executing
 1. Check Redis is running: `docker ps`
-2. Check worker is connected: `celery -A app.tasks.build_task:celery_app inspect ping`
+2. Check worker is connected: `celery -A app.tasks.build_worker:celery_app inspect ping`
 3. Check queue: `docker exec autogenix-redis redis-cli LLEN celery`
 
 ## Architecture Diagram
