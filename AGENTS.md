@@ -55,8 +55,8 @@ Do not fix unrelated defects in the same change. Note them and land them separat
 
 - Commit or push only when the user asks.
 - `main` is releasable. Never commit to it directly.
-- `develop` is the intended integration branch, but it does not exist yet. Ask before creating it.
-- One `feature/<short-name>` branch per unit of work.
+- `develop` is the integration branch. Direct commits and pushes to it are approved when the user asks for them.
+- One `feature/<short-name>` branch per unit of work, branched from `develop`.
 - The remote is `origin` at `https://github.com/Maheswarichandrani/autogenix.git`. Confirm with `git remote -v` before pushing.
 
 ---

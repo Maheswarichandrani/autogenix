@@ -46,7 +46,7 @@ Local remotes are configured as:
 origin     https://github.com/Maheswarichandrani/autogenix.git
 ```
 
-Check `git remote -v` before pushing. `develop` does not exist yet.
+Check `git remote -v` before pushing.
 
 ---
 
