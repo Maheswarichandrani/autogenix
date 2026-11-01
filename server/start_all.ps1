@@ -28,7 +28,7 @@ Start-Sleep 2
 
 # 3. Start Celery worker in new terminal
 Write-Host "`n[3/3] Starting Celery Worker..." -ForegroundColor Yellow
-$celeryCommand = "cd '$PWD'; .\venv\Scripts\Activate.ps1; Write-Host 'Celery Worker Ready' -ForegroundColor Green; celery -A app.tasks.build_task:celery_app worker --loglevel=info --pool=solo --concurrency=2"
+$celeryCommand = "cd '$PWD'; .\venv\Scripts\Activate.ps1; Write-Host 'Celery Worker Ready' -ForegroundColor Green; celery -A app.tasks.build_worker:celery_app worker --loglevel=info --pool=solo --concurrency=2"
 Start-Process powershell -ArgumentList "-NoExit", "-Command", $celeryCommand
 Write-Host "✓ Celery worker terminal opened" -ForegroundColor Green
 
