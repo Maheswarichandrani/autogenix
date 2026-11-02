@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Infinity, CheckCircle2, ChevronRight, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { usersAPI } from "@/lib/api";
-import type { DeveloperLevel, UpdateUserData } from "@/types/user";
+import type { DeveloperLevel, PreferredStack, UpdateUserData } from "@/types/user";
 import { useActionState } from "react";
 import { useSession } from "next-auth/react";
 
@@ -18,32 +18,19 @@ const STEPS = [
     id: 1,
     title: "Choose Your Stack",
     description: "What's your preferred tech stack?",
+    note: "This is your default stack. If you don't mention a stack in chat, Autogenix builds with this one. If you ask for a supported stack in chat, Autogenix follows your message instead.",
     field: "preferredStack" as const,
     options: [
-      { value: "nextjs", label: "Next.js", description: "React framework for production" },
       { value: "fastapi", label: "FastAPI", description: "Modern Python web framework" },
-      { value: "node", label: "Node.js", description: "JavaScript runtime" },
-      { value: "django", label: "Django", description: "Python web framework" },
       { value: "flask", label: "Flask", description: "Lightweight Python framework" },
+      { value: "django", label: "Django", description: "Full-featured Python framework" },
       { value: "express", label: "Express", description: "Node.js web framework" },
+      { value: "springboot", label: "Spring Boot", description: "Java application framework" },
+      { value: "gin", label: "Go + Gin", description: "Fast Go web framework" },
     ],
   },
   {
     id: 2,
-    title: "Choose Your Language",
-    description: "What's your preferred programming language?",
-    field: "preferredLanguage" as const,
-    options: [
-      { value: "typescript", label: "TypeScript", description: "Typed JavaScript" },
-      { value: "python", label: "Python", description: "General-purpose language" },
-      { value: "javascript", label: "JavaScript", description: "Web programming language" },
-      { value: "go", label: "Go", description: "Google's systems language" },
-      { value: "rust", label: "Rust", description: "Memory-safe systems language" },
-      { value: "java", label: "Java", description: "Enterprise programming language" },
-    ],
-  },
-  {
-    id: 3,
     title: "Developer Level",
     description: "What's your experience level?",
     field: "developerLevel" as const,
@@ -57,8 +44,7 @@ const STEPS = [
 ];
 
 type FormState = {
-  preferredStack: string;
-  preferredLanguage: string;
+  preferredStack: PreferredStack | "";
   developerLevel: DeveloperLevel | "";
 };
 
@@ -73,7 +59,6 @@ const GettingStartedPage = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const [formData, setFormData] = useState<FormState>({
     preferredStack: "",
-    preferredLanguage: "",
     developerLevel: "",
   });
   const [selectedOption, setSelectedOption] = useState<string>("");
@@ -85,13 +70,12 @@ const GettingStartedPage = () => {
   ): Promise<ActionState> {
     try {
       const data: UpdateUserData = {
-        preferred_stack: formData.get("preferredStack") as string,
-        preferred_language: formData.get("preferredLanguage") as string,
+        preferred_stack: formData.get("preferredStack") as PreferredStack,
         developer_level: formData.get("developerLevel") as DeveloperLevel,
       };
 
       // Validate data
-      if (!data.preferred_stack || !data.preferred_language || !data.developer_level) {
+      if (!data.preferred_stack || !data.developer_level) {
         return { error: "Please complete all steps" };
       }
 
@@ -134,7 +118,7 @@ const GettingStartedPage = () => {
 
   const currentStepData = STEPS.find((step) => step.id === currentStep);
   const isLastStep = currentStep === STEPS.length;
-  const canSubmit = formData.preferredStack && formData.preferredLanguage && formData.developerLevel;
+  const canSubmit = formData.preferredStack && formData.developerLevel;
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
@@ -199,8 +183,13 @@ const GettingStartedPage = () => {
             <form action={formAction}>
               {/* Hidden inputs for previous steps */}
               <input type="hidden" name="preferredStack" value={formData.preferredStack} />
-              <input type="hidden" name="preferredLanguage" value={formData.preferredLanguage} />
               <input type="hidden" name="developerLevel" value={formData.developerLevel} />
+
+              {currentStepData?.note && (
+                <p className="mb-4 p-3 rounded-lg bg-primary/5 border border-primary/20 text-sm text-muted-foreground">
+                  {currentStepData.note}
+                </p>
+              )}
 
               {/* Options Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">

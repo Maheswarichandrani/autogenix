@@ -4,6 +4,8 @@
 
 export type DeveloperLevel = "beginner" | "intermediate" | "advanced" | "founder";
 
+export type PreferredStack = "fastapi" | "flask" | "django" | "express" | "springboot" | "gin";
+
 export type SubscriptionTier = "free" | "pro" | "enterprise";
 
 export interface User {
@@ -13,8 +15,8 @@ export interface User {
   username?: string;
   
   // User preferences
-  preferred_stack?: string | null; // e.g., "nextjs", "fastapi", "node"
-  preferred_language?: string | null; // e.g., "python", "typescript"
+  preferred_stack?: string | null; // e.g., "fastapi", "express". Older accounts may hold other values
+  preferred_language?: string | null; // Set by the server from the stack, e.g., "python", "java"
   developer_level: DeveloperLevel;
   
   // Onboarding
@@ -36,8 +38,7 @@ export interface User {
  * Onboarding form data
  */
 export interface UpdateUserData {
-  preferred_stack: string;
-  preferred_language: string;
+  preferred_stack: PreferredStack;
   developer_level: DeveloperLevel;
 }
 

@@ -258,13 +258,17 @@ async def send_message(
             message_type        = message_type,
             project_name        = project.name,
             project_description = project.description or "",
+            preferred_stack     = current_user.preferred_stack,
+            developer_level     = current_user.developer_level,
         )
     else:
         resume_workflow_task.delay(
-            project_id   = str(project_id),
-            thread_id    = thread_id,
-            user_message = body.content or "",
-            message_type = message_type,
+            project_id      = str(project_id),
+            thread_id       = thread_id,
+            user_message    = body.content or "",
+            message_type    = message_type,
+            preferred_stack = current_user.preferred_stack,
+            developer_level = current_user.developer_level,
         )
 
     return {

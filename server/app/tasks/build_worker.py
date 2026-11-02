@@ -351,6 +351,8 @@ def start_workflow_task(
     message_type:        str,
     project_name:        str,
     project_description: str,
+    preferred_stack:     str | None = None,
+    developer_level:     str | None = None,
 ) -> None:
     from app.core.redis import publish
 
@@ -365,7 +367,12 @@ def start_workflow_task(
             "project_name":         project_name,
             "project_description":  project_description,
             "chat_history":         [],
-            "current_user_input":   {"message": user_message, "message_type": message_type},
+            "current_user_input":   {
+                "message":         user_message,
+                "message_type":    message_type,
+                "preferred_stack": preferred_stack,
+                "developer_level": developer_level,
+            },
             "build_requested":      False,
             "build_description":    "",
             "tech_stack_hint":      None,
@@ -460,10 +467,12 @@ def start_workflow_task(
 @celery_app.task(bind=True, name="workers.resume_workflow", max_retries=1)
 def resume_workflow_task(
     self,
-    project_id:   str,
-    thread_id:    str,
-    user_message: str,
-    message_type: str,
+    project_id:      str,
+    thread_id:       str,
+    user_message:    str,
+    message_type:    str,
+    preferred_stack: str | None = None,
+    developer_level: str | None = None,
 ) -> None:
     from app.core.redis import publish
 
@@ -505,8 +514,10 @@ def resume_workflow_task(
                 "project_description":  state.get("project_description", ""),
                 "chat_history":         state.get("chat_history", []),
                 "current_user_input":   {
-                    "message":      user_message,
-                    "message_type": message_type,
+                    "message":         user_message,
+                    "message_type":    message_type,
+                    "preferred_stack": preferred_stack,
+                    "developer_level": developer_level,
                 },
                 "build_requested":      False,
                 "build_description":    "",
@@ -540,8 +551,10 @@ def resume_workflow_task(
         # Inject user message into state, then resume
         wf.update_state(config, {
             "current_user_input": {
-                "message":      user_message,
-                "message_type": message_type,
+                "message":         user_message,
+                "message_type":    message_type,
+                "preferred_stack": preferred_stack,
+                "developer_level": developer_level,
             }
         })
 

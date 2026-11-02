@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 from app.core.database import get_db
+from app.core.stacks import get_stack
 from app.api.deps import get_current_user
 from app.repositories.user_repo import UserRepo
 from app.schemas.user_schemas import (
@@ -116,7 +117,7 @@ async def complete_user_onboarding(
         updated_user = await user_repo.complete_onboarding(
             user=current_user,
             preferred_stack=onboarding_data.preferred_stack,
-            preferred_language=onboarding_data.preferred_language,
+            preferred_language=get_stack(onboarding_data.preferred_stack).language,
             developer_level=onboarding_data.developer_level,
         )
 
