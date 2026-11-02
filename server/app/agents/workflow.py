@@ -75,6 +75,7 @@ from app.core.redis import publish
 from app.core.config import settings
 from app.core.docker_manager import DockerManager, RunConfig
 from app.core.llm import get_llm
+from app.core.stacks import SUPPORTED_STACK_NAMES, get_stack, resolve_tech_stack
 from app.agents.tools.docker_tools import get_docker_tools
 from app.agents.tools.security_tools import get_security_tools
 from app.agents.tools.deploy_tools import get_deploy_tools
@@ -178,15 +179,29 @@ Project context:
   Name:        {project_name}
   Description: {project_description}
 
+User context:
+  Default stack:   {default_stack}
+  Developer level: {developer_level}
+
+Supported stacks: {supported_stacks}
+
 Rules:
 - Always call exactly one tool. Never reply with raw text.
 - For start_build: include ALL details the user mentioned. Add sensible defaults but
   do NOT invent requirements the user didn't ask for.
+- If the user names a supported stack, put it in tech_stack. If they name no stack,
+  leave tech_stack empty and their default stack is applied automatically.
+- If the user asks for any other stack, call respond_to_user, say it is not supported
+  yet, and list the supported stacks.
+- Match how much you explain to the developer level. Never change what gets built
+  because of it.
 - If the intent is ambiguous, use respond_to_user to ask one focused clarifying question.
 - Only respond correctly for backend related user queries.
 - if asked out of scope, politely decline and suggest focusing on backend topics.
 - he/she can have normal conversations about backend topics.
 """
+
+_DEVELOPER_LEVELS = ("beginner", "intermediate", "advanced", "founder")
 
 _CONDUCTOR_TOOLS = [
     {
@@ -234,12 +249,20 @@ def conductor_node(state: GraphState) -> dict:
         # Nothing to process — graph just initialised or looping back
         return {"current_user_input": None}
 
-    user_message = user_input.get("message", "")
+    user_message    = user_input.get("message", "")
+    preferred_stack = user_input.get("preferred_stack")
+    developer_level = user_input.get("developer_level")
+    if developer_level not in _DEVELOPER_LEVELS:
+        developer_level = "beginner"
+
     _thinking(project_id, "Analysing your request...", "conductor")
 
     system = CONDUCTOR_SYSTEM.format(
         project_name        = state.get("project_name", "Untitled"),
         project_description = state.get("project_description", ""),
+        default_stack       = get_stack(preferred_stack).label,
+        developer_level     = developer_level,
+        supported_stacks    = SUPPORTED_STACK_NAMES,
     )
 
     messages = [{"role": "system", "content": system}]
@@ -273,7 +296,29 @@ def conductor_node(state: GraphState) -> dict:
 
     if tool_name == "start_build":
         description = tool_args.get("description", user_message)
-        tech_stack  = tool_args.get("tech_stack")
+        tech_stack, unsupported = resolve_tech_stack(
+            tool_args.get("tech_stack"), preferred_stack,
+        )
+
+        # Decided in code as well as the prompt, so no container ever starts
+        # for a stack the sandbox can't run.
+        if unsupported:
+            text = (
+                f"{unsupported} isn't supported yet. "
+                f"Autogenix can build with {SUPPORTED_STACK_NAMES}."
+            )
+            _stream_text(project_id, text, "conductor")
+            publish(project_id, {"type": "stage_change", "stage": WorkflowStage.IDLE.value})
+            publish(project_id, {"type": "done"})
+            return {
+                "build_requested":    False,
+                "current_user_input": None,
+                "chat_history":       [
+                    {"role": "user",      "content": user_message},
+                    {"role": "assistant", "content": text},
+                ],
+                "messages_to_save": [_msg("conductor", "assistant_response", text)],
+            }
 
         ack = (
             f"🚀 Got it! Building:\n\n{description}\n\n"
@@ -337,10 +382,10 @@ Your job is NOT complete until you output the run configuration. The system cann
 
 RULES:
 1. Write ALL files needed for a complete, working application.
-2. Start with dependency files (requirements.txt / package.json), then source, then config.
+2. Start with dependency files (requirements.txt / package.json / go.mod / pom.xml), then source, then config.
 3. Always write COMPLETE files — never partial or placeholder content.
 4. After writing files, install dependencies with exec_command.
-5. Run check_syntax on every Python/JS file you write.
+5. Run check_syntax on every Python/JS file you write. For Go and Java, run the build instead, because check_syntax skips those files.
 6. The app MUST listen on port 8080 (the PORT env var is already set to 8080).
 7. Include a health check endpoint at /health returning HTTP 200.
 8. Write a Dockerfile.
@@ -353,7 +398,9 @@ echo '<<<RUN_CONFIG>>>{{\"install_command\":\"<your_install_cmd>\",\"start_comma
 
 Examples:
 - Flask: echo '<<<RUN_CONFIG>>>{{\"install_command\":\"pip install -r requirements.txt\",\"start_command\":\"python app.py\",\"health_check_path\":\"/health\",\"startup_wait_secs\":8}}<<<END_RUN_CONFIG>>>'
-- Node: echo '<<<RUN_CONFIG>>>{{\"install_command\":\"npm install\",\"start_command\":\"npm start\",\"health_check_path\":\"/health\",\"startup_wait_secs\":8}}<<<END_RUN_CONFIG>>>'
+- Express: echo '<<<RUN_CONFIG>>>{{\"install_command\":\"npm install\",\"start_command\":\"npm start\",\"health_check_path\":\"/health\",\"startup_wait_secs\":8}}<<<END_RUN_CONFIG>>>'
+- Gin: echo '<<<RUN_CONFIG>>>{{\"install_command\":\"go mod tidy && go build -o app .\",\"start_command\":\"./app\",\"health_check_path\":\"/health\",\"startup_wait_secs\":8}}<<<END_RUN_CONFIG>>>'
+- Spring Boot: echo '<<<RUN_CONFIG>>>{{\"install_command\":\"mvn package -q -DskipTests\",\"start_command\":\"java -jar target/app.jar\",\"health_check_path\":\"/health\",\"startup_wait_secs\":30}}<<<END_RUN_CONFIG>>>'
 
 ⚠️ WITHOUT THIS STEP, YOUR APPLICATION CANNOT BE STARTED OR TESTED ⚠️
 """
@@ -394,7 +441,7 @@ def artificer_node(state: GraphState) -> dict:
         tech_stack_section = tech_section,
     )
 
-    docker = DockerManager(project_id, build_id)
+    docker = DockerManager(project_id, build_id, (tech_stack_hint or {}).get("framework"))
 
     try:
         _thinking(project_id, "Starting Docker container...", "artificer")

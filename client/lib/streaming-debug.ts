@@ -10,7 +10,7 @@
 const IS_DEBUG = process.env.NODE_ENV === "development";
 
 export const streamingDebug = {
-  sse: (event: any, action: string) => {
+  sse: (event: { type: string }, action: string) => {
     if (!IS_DEBUG) return;
     
     const timestamp = new Date().toISOString().slice(11, 23);
@@ -27,7 +27,7 @@ export const streamingDebug = {
     }
   },
 
-  store: (action: string, state: any) => {
+  store: (action: string, state: unknown) => {
     if (!IS_DEBUG) return;
     
     const timestamp = new Date().toISOString().slice(11, 23);
@@ -38,7 +38,7 @@ export const streamingDebug = {
     );
   },
 
-  render: (component: string, props: any) => {
+  render: (component: string, props: unknown) => {
     if (!IS_DEBUG) return;
     
     const timestamp = new Date().toISOString().slice(11, 23);

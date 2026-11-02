@@ -43,6 +43,7 @@ import docker
 import docker.errors
 
 from app.core.config import settings
+from app.core.stacks import get_stack
 
 log = logging.getLogger(__name__)
 
@@ -94,7 +95,9 @@ STACK_DEFAULTS: dict[str, dict] = {
                    "start":   "python app.py"},
     "express":    {"install": "npm install",
                    "start":   "node index.js"},
-    "nextjs":     {"install": "npm install && npm run build",
+    "gin":        {"install": "go mod tidy && go build -o app .",
+                   "start":   "./app"},
+    "nextjs":    {"install": "npm install && npm run build",
                    "start":   "npm start"},
     "django":     {"install": "pip install -r requirements.txt",
                    "start":   "python manage.py runserver 0.0.0.0:8080"},
@@ -152,14 +155,12 @@ class DockerManager:
     creates its own instance or uses reattach().
     """
 
-    # Hard resource limits — never let agent influence these
-    _MEM_LIMIT  = "512m"
-    _CPU_QUOTA  = 50_000   # 50% of one CPU
     _CPU_PERIOD = 100_000
 
-    def __init__(self, project_id: str, build_id: str) -> None:
+    def __init__(self, project_id: str, build_id: str, stack: str | None = None) -> None:
         self.project_id:     str              = project_id
         self.build_id:       str              = build_id
+        self.stack:          str | None       = stack
         self.container_name: str              = f"build-{build_id}"
         self.container:      docker.models.containers.Container | None = None
         self.app_port:       str | None       = None   # random host port chosen by Docker
@@ -214,9 +215,11 @@ class DockerManager:
         except docker.errors.NotFound:
             pass
 
+        stack = get_stack(self.stack)
+
         try:
             self.container = client.containers.run(
-                image       = settings.DOCKER_BASE_IMAGE,
+                image       = stack.image,
                 name        = self.container_name,
                 command     = "tail -f /dev/null",   # keep alive; agent starts the real process
                 detach      = True,
@@ -227,8 +230,8 @@ class DockerManager:
                     "BUILD_ID":   self.build_id,
                     "PORT":       str(INTERNAL_PORT),
                 },
-                mem_limit  = self._MEM_LIMIT,
-                cpu_quota  = self._CPU_QUOTA,
+                mem_limit  = stack.mem_limit,
+                cpu_quota  = stack.cpu_quota,
                 cpu_period = self._CPU_PERIOD,
             )
         except Exception as e:

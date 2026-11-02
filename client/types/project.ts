@@ -3,6 +3,11 @@
  * and ProjectResponse schema
  */
 
+export type ProjectStack = {
+  framework?: string;
+  [key: string]: unknown;
+};
+
 export interface Project {
   id: string; // UUID
   name: string;
@@ -10,7 +15,7 @@ export interface Project {
 
   // Status and metadata
   status: string; // "active" | "deleted" etc.
-  stack?: Record<string, any> | null;
+  stack?: ProjectStack | null;
 
   // Git & Deployment
   repo_url?: string | null;
@@ -40,7 +45,7 @@ export interface UpdateProjectData {
   name?: string;
   description?: string;
   status?: string;
-  stack?: Record<string, any>;
+  stack?: ProjectStack;
   repo_url?: string;
   latest_deploy_url?: string;
 }

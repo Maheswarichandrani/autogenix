@@ -77,9 +77,11 @@ export async function apiFetch<T = unknown>(
       data = await res.json();
     }
 
+    const errorBody = data as { detail?: string; error?: string } | undefined;
+
     return {
       data: res.ok ? data : undefined,
-      error: res.ok ? undefined : (data as any)?.detail || (data as any)?.error || `HTTP ${res.status}`,
+      error: res.ok ? undefined : errorBody?.detail || errorBody?.error || `HTTP ${res.status}`,
       status: res.status,
     };
   } catch (err) {

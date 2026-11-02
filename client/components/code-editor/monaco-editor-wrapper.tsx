@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useSyncExternalStore } from "react";
 import dynamic from "next/dynamic";
 import { useTheme } from "next-themes";
 import { Loader2 } from "lucide-react";
@@ -177,12 +177,13 @@ export function MonacoEditorWrapper({
     const [isEditorReady, setIsEditorReady] = useState(false);
     const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
     const { theme, resolvedTheme } = useTheme();
-    const [mounted, setMounted] = useState(false);
 
-    // Track mounting state for hydration
-    useEffect(() => {
-        setMounted(true);
-    }, []);
+    // Track mounting state for hydration: false on the server and during hydration, then true
+    const mounted = useSyncExternalStore(
+        () => () => {},
+        () => true,
+        () => false,
+    );
 
     // Get the effective theme (resolving "system" to actual theme)
     const effectiveTheme = mounted ? (theme === "system" ? resolvedTheme : theme) : "dark";

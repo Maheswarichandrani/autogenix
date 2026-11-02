@@ -15,17 +15,16 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
       <ReactMarkdown
         components={{
           // Code blocks
-          code({ inline, className, children, ...props }: any) {
+          code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "");
             const codeContent = String(children).replace(/\n$/, "");
 
-            return !inline && match ? (
+            return match ? (
               <SyntaxHighlighter
                 style={oneDark}
                 language={match[1]}
                 PreTag="div"
                 className="rounded-md my-1 text-xs!"
-                {...props}
               >
                 {codeContent}
               </SyntaxHighlighter>
@@ -39,18 +38,18 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
             );
           },
           // Paragraphs
-          p({ children }: any) {
+          p({ children }) {
             return <p className="leading-snug mb-1 last:mb-0 text-sm">{children}</p>;
           },
           // Lists
-          ul({ children }: any) {
+          ul({ children }) {
             return <ul className="list-disc list-inside space-y-0.5 my-1 text-sm">{children}</ul>;
           },
-          ol({ children }: any) {
+          ol({ children }) {
             return <ol className="list-decimal list-inside space-y-0.5 my-1 text-sm">{children}</ol>;
           },
           // Links
-          a({ href, children }: any) {
+          a({ href, children }) {
             return (
               <a
                 href={href}
@@ -63,13 +62,13 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
             );
           },
           // Headings
-          h1({ children }: any) {
+          h1({ children }) {
             return <h1 className="text-base font-semibold mt-2 mb-1">{children}</h1>;
           },
-          h2({ children }: any) {
+          h2({ children }) {
             return <h2 className="text-sm font-semibold mt-2 mb-1">{children}</h2>;
           },
-          h3({ children }: any) {
+          h3({ children }) {
             return <h3 className="text-sm font-medium mt-1 mb-0.5">{children}</h3>;
           },
         }}
