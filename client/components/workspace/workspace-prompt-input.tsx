@@ -69,6 +69,8 @@ export function WorkspacePromptInput({
                 const isRecent = Date.now() - timestamp < 5 * 60 * 1000;
                 
                 if (isRecent && prompt) {
+                    // localStorage is unavailable during server render, so this must run in an effect
+                    // eslint-disable-next-line react-hooks/set-state-in-effect
                     setValue(prompt);
                 }
                 

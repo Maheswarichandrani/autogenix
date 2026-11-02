@@ -40,7 +40,7 @@ const ProjectsPage = async () => {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">{session?.user?.name}'s projects</h1>
+            <h1 className="text-3xl font-bold">{session?.user?.name}&apos;s projects</h1>
           </div>
           <div className="flex gap-2">
             <Button size="sm">

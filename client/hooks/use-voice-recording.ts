@@ -1,5 +1,28 @@
 import { useState, useRef, useCallback } from "react";
 
+// lib.dom has no SpeechRecognition types, so these cover only what this hook uses
+interface SpeechRecognitionResultEvent {
+  results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionInstance {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionResultEvent) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionInstance;
+
+type SpeechRecognitionWindow = Window & {
+  SpeechRecognition?: SpeechRecognitionConstructor;
+  webkitSpeechRecognition?: SpeechRecognitionConstructor;
+};
+
 interface UseVoiceRecordingOptions {
   onTranscript: (text: string) => void;
   onResize?: () => void;
@@ -21,7 +44,7 @@ export function useVoiceRecording({
   const [isRecording, setIsRecording] = useState(false);
   const [micError, setMicError] = useState(false);
 
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const isStartingRef = useRef(false);
   const baseTextRef = useRef("");
 
@@ -32,8 +55,8 @@ export function useVoiceRecording({
 
   const startRecording = useCallback(async () => {
     const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
+      (window as SpeechRecognitionWindow).SpeechRecognition ||
+      (window as SpeechRecognitionWindow).webkitSpeechRecognition;
 
     // Guard: unsupported, already recording, or double-click
     if (!SpeechRecognition || isRecording || isStartingRef.current) return;
@@ -50,7 +73,7 @@ export function useVoiceRecording({
     recognition.interimResults = true;
     recognition.lang = "en-US";
 
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event) => {
       const lastResult = event.results[event.results.length - 1];
       const lastWord = lastResult[0].transcript.trim().toLowerCase();
 
@@ -63,7 +86,7 @@ export function useVoiceRecording({
 
       // Append new transcript to base text (preserves manual edits)
       const newTranscript = Array.from(event.results)
-        .map((r: any) => r[0].transcript)
+        .map((r) => r[0].transcript)
         .join("");
 
       onTranscript(baseTextRef.current + newTranscript);

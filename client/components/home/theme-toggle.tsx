@@ -1,7 +1,7 @@
 "use client";
 
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { Label } from "@/components/ui/label";
 import {
     Select,
@@ -13,12 +13,13 @@ import {
 
 export function ThemeToggle() {
     const { theme, setTheme } = useTheme();
-    const [mounted, setMounted] = useState(false);
 
-    // Avoid hydration mismatch
-    useEffect(() => {
-        setMounted(true);
-    }, []);
+    // Avoid hydration mismatch: false on the server and during hydration, then true
+    const mounted = useSyncExternalStore(
+        () => () => {},
+        () => true,
+        () => false,
+    );
 
     if (!mounted) {
         return (
