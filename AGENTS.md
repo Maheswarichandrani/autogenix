@@ -54,6 +54,7 @@ Do not fix unrelated defects in the same change. Note them and land them separat
 **Git:**
 
 - Commit or push only when the user asks.
+- Commits and PRs carry the user's name only. Never add `Co-Authored-By: Claude` trailers or "Generated with Claude Code" lines.
 - `main` is releasable. Never commit to it directly.
 - `develop` is the integration branch. Direct commits and pushes to it are approved when the user asks for them.
 - One `feature/<short-name>` branch per unit of work, branched from `develop`.
@@ -63,7 +64,7 @@ Do not fix unrelated defects in the same change. Note them and land them separat
 
 # 3. UI work
 
-You do not design UI. Where a design reference is provided, reproduce it exactly: layout, spacing, typography, color, and states. Do not restyle or improve beyond the reference. Reuse `client/components/ui/` (shadcn) and existing Tailwind patterns before adding anything new. Everything must work down to mobile width.
+You do not design UI. Where a design reference is provided, reproduce it exactly: layout, spacing, typography, color, and states. Do not restyle or improve beyond the reference. Reuse `client/components/ui/` (shadcn) and existing Tailwind patterns before adding anything new. Design must stay consistent across the whole application, and every page must be fully responsive down to mobile width.
 
 ---
 
@@ -175,6 +176,11 @@ Build to these unless the user changes them.
 - Credentials never enter LangGraph state, because state is written to Postgres checkpoints.
 - Humans stay in control of risky steps. Plan approval, deploy approval, and posting PR comments are explicit human decisions.
 - Live events keep the current shape: agents publish, the API streams, the browser renders. See section 11.
+- Autogenix offers six stacks: FastAPI, Flask, Django, Express, Spring Boot, and Go + Gin. Do not offer a stack until it passes a real test build.
+- Onboarding asks for stack and developer level. Language is removed from the form, because stack decides it, and the `preferred_language` column stays.
+- Saved preferences are defaults passed to agents. What the user types in chat always wins. The onboarding stack step must tell the user this clearly.
+- The backend fetches the user's primary email from GitHub on sign-in. It never trusts an email sent by the client.
+- Build limits are enforced on the backend before the app goes public. Plan display on the billing page is low priority.
 
 ---
 
@@ -196,7 +202,8 @@ Keep these relationships. Models live in `server/app/models/`, and every schema 
 # 9. The sandbox
 
 - `DockerManager` owns the container lifecycle. Agents reach containers only through tools in `agents/tools/`.
-- Base image is `python:3.11-slim`. Limits are 512 MB of memory and 50% of one CPU. Agents must never be able to change them.
+- Each stack's image and limits live in `server/app/core/stacks.py`. Agents must never be able to change them.
+- `DockerManager.exec` ignores its `timeout` argument, so a hanging command never stops. This is a known defect.
 - The app listens on internal port 8080, and Docker picks the host port.
 - Treat everything inside the container as untrusted. Never place a token where code in the container can read it.
 - Containers run on the `autogenix_network` Docker network. This is separate from the compose network used by Redis.
@@ -247,6 +254,7 @@ You cannot infer these from the code, so keep them in mind.
 - `create_github_repo` reuses an existing repo of the same name, and `push_to_github` then force-pushes. This can overwrite a user's repo.
 - `deploy_confirm_task` puts decrypted tokens into LangGraph state, which reaches checkpoints (Reference §6.7).
 - The security verdict parser fails open (Reference §6.9).
+- `pkill` is missing from the `python:3.11-slim` and `node:22-slim` images, and `restart_app` hides that with `|| true`. The old app keeps running after a fix. Add `procps` to the `apt-get` line in `spin_up` before re-enabling the fix loop.
 
 **Runtime behaviour:**
 
@@ -292,15 +300,18 @@ First-time setup and environment variables: Reference §8.
 Work in this order, because each step depends on the last. Designs are in Reference §7.
 
 1. **Phase 0, make it runnable:** clean requirements, fix `Build.metadata_`, register the env-vars router, align secret names, add `.env.example`, remove committed junk.
-2. **Secure Deployer:** fix the items under "Fix before re-enabling Deployer" in section 12.
-3. **Re-enable the pipeline:** Guardian, the fix loop, and Deployer.
-4. **Human in the loop:** working cancel, durable pauses, a decision audit trail.
-5. **Plan mode:** a planner node and plan approval before any container starts.
-6. **Error management:** typed errors and correlation ids.
-7. **Sockets:** Redis Streams with replay first, then WebSockets.
-8. **RAG:** wire in the existing code search.
-9. **Existing codebases:** repo import and safe edits.
-10. **PR analyzer:** the Reviewer agent.
+2. **User data fixes:** save the primary email, reduce onboarding options, and pass preferences to agents.
+3. **Secure Deployer:** fix the items under "Fix before re-enabling Deployer" in section 12.
+4. **Re-enable the pipeline:** Guardian, the fix loop, and Deployer.
+5. **Build limits:** enforce on the backend before the app goes public.
+6. **Human in the loop:** working cancel, durable pauses, a decision audit trail.
+7. **Plan mode:** a planner node and plan approval before any container starts.
+8. **Error management:** typed errors and correlation ids.
+9. **Sockets:** Redis Streams with replay first, then WebSockets.
+10. **RAG:** wire in the existing code search.
+11. **Existing codebases:** repo import and safe edits.
+12. **PR analyzer:** the Reviewer agent.
+13. **Plan display:** show the real plan and usage on the billing page.
 
 ---
 
