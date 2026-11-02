@@ -8,6 +8,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         GitHub({
             clientId: process.env.GITHUB_CLIENT_ID!,
             clientSecret: process.env.GITHUB_CLIENT_SECRET!,
+            // GitHub sends this as the `iss` callback param; Auth.js rejects it unless it matches
+            issuer: "https://github.com/login/oauth",
             authorization: {
                 params: {
                     scope: "read:user user:email repo",
