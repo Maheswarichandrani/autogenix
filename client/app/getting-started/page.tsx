@@ -90,8 +90,8 @@ const GettingStartedPage = () => {
       // This will re-run the JWT and session callbacks in auth.ts
       await update({ onboardingCompleted: true });
 
-      // Redirect to home
-      router.push("/home");
+      // Show the welcome screen, which then continues to /home
+      router.push("/welcome");
 
       return { success: true };
     } catch (error) {
