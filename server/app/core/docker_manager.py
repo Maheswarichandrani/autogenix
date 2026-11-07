@@ -258,7 +258,7 @@ class DockerManager:
                 log.warning("Failed to create /workspace: %s", result.output)
             
             # Now we can use the regular exec method for other bootstrap commands
-            self.exec("apt-get update -qq && apt-get install -y -qq git curl 2>/dev/null")
+            self.exec("apt-get update -qq && apt-get install -y -qq git curl 2>/dev/null", timeout=300)
         except Exception as e:
             log.warning("Failed to bootstrap container %s: %s", self.container_name, e)
 
@@ -461,25 +461,40 @@ class DockerManager:
         Run a shell command inside the container.
         Returns (exit_code, output_string).
 
-        timeout: seconds before giving up (default 120, use 300 for installs)
+        timeout: seconds before the command is stopped (default 120, use 300 for installs).
+                 Enforced inside the container by GNU `timeout`, which kills the whole
+                 process group. The SDK reads exec output with no socket timeout, so
+                 without this a command that never ends blocks the worker forever.
         workdir: working directory for command execution (default /workspace)
         """
         if not self.container:
             raise RuntimeError("Container not started — call spin_up() first.")
-        
+
         try:
             # Check if container is still running before executing
             self.container.reload()
             if self.container.status != "running":
                 raise RuntimeError(f"Container {self.container_name} is not running (status: {self.container.status})")
-            
+
             result = self.container.exec_run(
-                ["/bin/sh", "-c", command],
+                ["timeout", "--kill-after=5", str(timeout), "/bin/sh", "-c", command],
                 workdir=workdir,
                 demux=False,
             )
-            return result.exit_code, (result.output or b"").decode("utf-8", errors="replace")
-            
+            exit_code = result.exit_code
+            output    = (result.output or b"").decode("utf-8", errors="replace")
+
+            # Running without a limit is the bug this guards against, so fail loudly
+            if exit_code == 127 and "timeout" in output and "not found" in output:
+                raise RuntimeError(f"`timeout` is missing from the image for {self.container_name}")
+
+            # 124: stopped by TERM, 137: killed after the grace period
+            if exit_code in (124, 137):
+                log.warning("Command timed out after %ss in %s: %.200s", timeout, self.container_name, command)
+                output = f"{output.rstrip()}\nCommand timed out after {timeout}s and was stopped.".lstrip()
+
+            return exit_code, output
+
         except docker.errors.NotFound:
             raise RuntimeError(f"Container {self.container_name} no longer exists")
         except docker.errors.APIError as e:
