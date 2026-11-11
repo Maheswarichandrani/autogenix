@@ -41,7 +41,8 @@ def get_docker_tools(docker: DockerManager, project_id: str | None = None) -> li
           exec_command("cat requirements.txt")
           exec_command("python -c 'import fastapi; print(fastapi.__version__)'")
         """
-        exit_code, output = docker.exec(command)
+        # Agents run installs and builds through this, so allow longer than the default
+        exit_code, output = docker.exec(command, timeout=300)
         status = "✅ EXIT 0" if exit_code == 0 else f"❌ EXIT {exit_code}"
         result = output.strip() if output.strip() else "(no output)"
         return f"{status}\n{result}"

@@ -203,7 +203,6 @@ Keep these relationships. Models live in `server/app/models/`, and every schema 
 
 - `DockerManager` owns the container lifecycle. Agents reach containers only through tools in `agents/tools/`.
 - Each stack's image and limits live in `server/app/core/stacks.py`. Agents must never be able to change them.
-- `DockerManager.exec` ignores its `timeout` argument, so a hanging command never stops. This is a known defect.
 - The app listens on internal port 8080, and Docker picks the host port.
 - Treat everything inside the container as untrusted. Never place a token where code in the container can read it.
 - Containers run on the `autogenix_network` Docker network. This is separate from the compose network used by Redis.
