@@ -21,8 +21,9 @@ KEY FIXES vs original:
      returned {deploy_payload: None}, THEN the interrupt fired — and resume
      would re-enter deployer from the top with still-None payload. Infinite loop.
      With interrupt_before, the deployer hasn't run yet when the graph parks.
-     deploy_confirm_task injects credentials via update_state, then streams —
-     deployer runs exactly once with full credentials.
+     deploy_confirm_task puts credentials in agents/deploy_context (process
+     memory, never graph state or checkpoints), then resumes — deployer runs
+     exactly once and take()s them.
 
   2. run_config added to GraphState. Artificer stores the parsed RunConfig
      dict here so Guardian and artificer_fix can reattach with DockerManager
@@ -78,7 +79,9 @@ from app.core.llm import get_llm
 from app.core.stacks import SUPPORTED_STACK_NAMES, get_stack, resolve_tech_stack
 from app.agents.tools.docker_tools import get_docker_tools
 from app.agents.tools.security_tools import get_security_tools
-from app.agents.tools.deploy_tools import get_deploy_tools
+from app.agents.tools.deploy_tools import get_deploy_tools, make_repo_name
+from app.agents import deploy_context
+from langchain_core.runnables import RunnableConfig
 from app.agents.react import run_react_agent
 from app.schemas.enums import WorkflowStage
 
@@ -114,8 +117,7 @@ class GraphState(TypedDict, total=False):
     security_issues:        list
     all_security_issues:    list
 
-    # Deployer
-    deploy_payload:         Optional[dict]    # Wiped after use — NEVER persisted
+    # Deployer — secrets NEVER go in state (see agents/deploy_context.py)
     railway_just_connected: bool              # Signal from railway_connect_task
 
     # Persistence
@@ -1209,7 +1211,7 @@ def artificer_fix_node(state: GraphState) -> dict:
 
 # ═══════════════════════════════════════════════════════════════════
 # NODE 4 — DEPLOYER
-# Runs ONLY when deploy_payload is present in state.
+# Runs ONLY after deploy_confirm_task put credentials in deploy_context.
 # The env_var_request SSE event and the interrupt both happen BEFORE
 # this node runs (see route_after_guardian and interrupt_before=["deployer"]).
 # ═══════════════════════════════════════════════════════════════════
@@ -1218,8 +1220,8 @@ _DEPLOYER_SYSTEM = """\
 You are Deployer. Deploy the application to Railway via GitHub.
 
 Steps:
-1. create_github_repo — create a private repo named "{repo_name}"
-2. push_to_github     — push /workspace to the repo
+1. create_github_repo — creates (or reuses) this project's private repo; name and visibility are fixed
+2. push_to_github     — push /workspace to the repo, using the clone_url from step 1
 3. deploy_to_railway  — deploy the repo to Railway
 4. check_deploy_status / wait_for_deploy — poll until live
 5. Report the final live URL
@@ -1229,29 +1231,26 @@ Build description: {build_description}
 """
 
 
-def deployer_node(state: GraphState) -> dict:
+def deployer_node(state: GraphState, config: RunnableConfig) -> dict:
     project_id     = state["project_id"]
     build_id       = state.get("build_id", "")
-    deploy_payload = state.get("deploy_payload")
     run_config_dict = state.get("run_config")
 
     _thinking(project_id, "Starting deployment...", "deployer")
     publish(project_id, {"type": "stage_change", "stage": WorkflowStage.DEPLOYING.value})
 
-    if not deploy_payload:
-        # Should not happen with interrupt_before=["deployer"] — guard anyway
-        log.error("deployer_node reached with no deploy_payload project=%s", project_id)
+    # Secrets come from process memory, never from graph state (deploy_context.py)
+    thread_id = (config.get("configurable") or {}).get("thread_id", "")
+    ctx = deploy_context.take(thread_id) if thread_id else None
+    if ctx is None:
+        log.error("deployer_node reached with no deploy context project=%s", project_id)
         publish(project_id, {
             "type":  "text_chunk",
-            "chunk": "❌ Internal error: deploy_payload missing. Please re-submit env vars.\n",
+            "chunk": "❌ Deployment credentials were not available. Please confirm the deploy again.\n",
             "role":  "deployer",
         })
         publish(project_id, {"type": "done"})
-        return {"error": "deploy_payload missing"}
-
-    github_token    = deploy_payload.get("github_token", "")
-    railway_api_key = deploy_payload.get("railway_api_key", "")
-    plaintext_vars  = deploy_payload.get("plaintext_vars", {})
+        return {"error": "deploy context missing"}
 
     docker = DockerManager.reattach(
         project_id = project_id,
@@ -1259,26 +1258,34 @@ def deployer_node(state: GraphState) -> dict:
         run_config = run_config_dict,
     )
 
-    tools = get_deploy_tools(docker, github_token, railway_api_key=railway_api_key)
-
     project_name = state.get("project_name", "autogenix-app")
-    repo_name    = project_name.lower().replace(" ", "-")[:40]
+    tools = get_deploy_tools(
+        docker,
+        github_token    = ctx.github_token,
+        railway_api_key = ctx.railway_api_key,
+        app_env_vars    = ctx.app_env_vars,
+        repo_name       = make_repo_name(project_name, project_id),
+        project_id      = project_id,
+    )
+    env_names = ", ".join(sorted(ctx.app_env_vars)) or "none"
+    del ctx
 
     system = _DEPLOYER_SYSTEM.format(
         project_name      = project_name,
-        repo_name         = repo_name,
         build_description = state.get("build_description", ""),
     )
 
     publish(project_id, {"type": "agent_start", "role": "deployer"})
     _thinking(project_id, "Deploying to Railway...", "deployer")
 
-    env_str = json.dumps(plaintext_vars) if plaintext_vars else "No environment variables."
     final_text, tool_log = run_react_agent(
         project_id  = project_id,
         role        = "deployer",
         system      = system,
-        user_prompt = f"Deploy the application.\nEnvironment variables: {env_str}",
+        user_prompt = (
+            "Deploy the application.\n"
+            f"Environment variables to set (values are applied automatically): {env_names}"
+        ),
         tools       = tools,
         max_iter    = 15,
         model       = "gpt-4o",
@@ -1301,7 +1308,6 @@ def deployer_node(state: GraphState) -> dict:
     return {
         "repo_url":      repo_url,
         "deploy_url":    deploy_url,
-        "deploy_payload": None,   # Wipe credentials from state
         "messages_to_save": [_msg("deployer", "assistant_response", final_text or "Deployment complete.")],
     }
 

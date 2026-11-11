@@ -18,7 +18,7 @@ KEY FIXES vs original:
   3. deploy_confirm_task — fixed interrupt strategy.
      We now use interrupt_before=["deployer"] (set in workflow.py).
      This means the deployer node hasn't run yet when we get here.
-     So we: update_state({"deploy_payload": payload}) then stream(None).
+     So we: put credentials in agents/deploy_context (memory only), then stream(None).
      The deployer runs ONCE with full credentials. No re-entry bug.
 
   4. Module-level DB engine — one connection pool shared across all tasks
@@ -173,7 +173,7 @@ def _save_state_to_db(db: Session, state: dict, project_id: str, build_id: str |
 
     - Replaces temp artifact IDs with real DB UUIDs inside message blocks.
     - Persists run_config to Build.metadata for cross-node reattach.
-    - NEVER persists deploy_payload (contains plaintext credentials).
+    - Credentials never reach graph state; see agents/deploy_context.py.
     - After commit the caller MUST call wf.update_state(config, {"messages_to_save": None})
       to reset the reducer in the LangGraph checkpoint so messages aren't re-saved
       on the next invocation.
@@ -381,7 +381,6 @@ def start_workflow_task(
             "security_iteration":   0,
             "security_issues":      [],
             "all_security_issues":  [],
-            "deploy_payload":       None,
             "artifacts":            [],
             "messages_to_save":     [],
             "_saved_msg_count":     0,
@@ -432,7 +431,6 @@ def start_workflow_task(
                 "security_iteration":   0,
                 "security_issues":      [],
                 "all_security_issues":  [],
-                "deploy_payload":       None,
                 "artifacts":            [],
                 "messages_to_save":     [],
                 "_saved_msg_count":     0,
@@ -527,7 +525,6 @@ def resume_workflow_task(
                 "security_iteration":   0,
                 "security_issues":      [],
                 "all_security_issues":  [],
-                "deploy_payload":       None,
                 "artifacts":            [],
                 "messages_to_save":     [],
                 "_saved_msg_count":     0,
@@ -591,7 +588,6 @@ def resume_workflow_task(
                 "security_iteration":   0,
                 "security_issues":      [],
                 "all_security_issues":  [],
-                "deploy_payload":       None,
                 "artifacts":            [],
                 "messages_to_save":     [],
                 "_saved_msg_count":     0,
@@ -663,16 +659,17 @@ def railway_connect_task(self, project_id: str, thread_id: str) -> None:
 # ═══════════════════════════════════════════════════════════════════
 # TASK 4 — DEPLOY CONFIRM
 # User submitted their app env vars.
-# Worker assembles FULL deploy_payload server-side (never from user),
-# updates graph state, then resumes the deployer node.
+# Worker loads credentials server-side (never from user) into deploy_context,
+# then resumes the deployer node.
 #
 # INTERRUPT STRATEGY:
 #   workflow.py uses interrupt_before=["deployer"].
 #   This means deployer has NOT run yet when we get here.
 #   The deployer emitted env_var_request SSE *outside* the graph
 #   (from the artificer→guardian→deployer transition logic below).
-#   Now we inject credentials into state and stream — deployer runs once
-#   with full credentials. No re-entry, no double-publish.
+#   Credentials go into agents/deploy_context (process memory) — NEVER into
+#   graph state, because every update_state writes a Postgres checkpoint.
+#   App env vars arrive Fernet-encrypted so Redis never holds plaintext.
 # ═══════════════════════════════════════════════════════════════════
 
 @celery_app.task(bind=True, name="workers.deploy_confirm", max_retries=1)
@@ -681,15 +678,14 @@ def deploy_confirm_task(
     project_id:     str,
     thread_id:      str,
     user_id:        str,
-    plaintext_vars: dict,
+    encrypted_vars: str,
 ) -> None:
+    import json
+    from app.agents import deploy_context
     from app.core.redis import publish
     from app.utils.encryption import decrypt_token
 
     db = _get_session()
-    github_token    = None
-    railway_api_key = None
-    deploy_payload  = None
 
     try:
         wf     = _workflow()
@@ -735,32 +731,26 @@ def deploy_confirm_task(
             _publish_connect_railway(project_id, build_id)
             return
 
-        # ── Decrypt (in memory only from this point) ──────────────
-        github_token    = decrypt_token(user.github_token_encrypted)
-        railway_api_key = decrypt_token(user.railway_api_key_encrypted)
+        # ── Decrypt into process memory only (never graph state) ──
+        app_env_vars = json.loads(decrypt_token(encrypted_vars) or "{}")
+        if not isinstance(app_env_vars, dict):
+            raise ValueError("Deploy env vars payload is not an object")
 
         log.info(
             "deploy_confirm project=%s user=%s vars_count=%d",
-            project_id, user_id, len(plaintext_vars),
+            project_id, user_id, len(app_env_vars),
         )
-        # NEVER log plaintext_vars
+        # NEVER log app_env_vars values
 
-        # ── Assemble deploy_payload and inject into graph state ────
-        deploy_payload = {
-            "plaintext_vars":  plaintext_vars,
-            "github_token":    github_token,
-            "railway_api_key": railway_api_key,
-        }
+        deploy_context.put(thread_id, deploy_context.DeployContext(
+            github_token    = decrypt_token(user.github_token_encrypted),
+            railway_api_key = decrypt_token(user.railway_api_key_encrypted),
+            app_env_vars    = {str(k): str(v) for k, v in app_env_vars.items()},
+        ))
+        del app_env_vars
 
-        # update_state before streaming — deployer reads from state, not Command
-        wf.update_state(config, {"deploy_payload": deploy_payload})
-
-        # ── Resume — deployer runs once with full credentials ──────
+        # ── Resume — deployer_node take()s the context ────────────
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
-
-        # Wipe credentials from graph state immediately
-        wf.update_state(config, {"deploy_payload": None})
-        state["deploy_payload"] = None
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
         wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
@@ -776,11 +766,8 @@ def deploy_confirm_task(
         _close_streams(project_id)
         raise self.retry(exc=e, countdown=30)
     finally:
-        # Always wipe secrets from local scope
-        plaintext_vars.clear()
-        if github_token:    github_token    = None  # noqa: F841
-        if railway_api_key: railway_api_key = None  # noqa: F841
-        if deploy_payload:  deploy_payload  = None  # noqa: F841
+        # Secrets must not outlive this task (no-op if deployer took them)
+        deploy_context.discard(thread_id)
         db.close()
 
 

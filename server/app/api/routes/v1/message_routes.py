@@ -38,6 +38,7 @@ Docs:    https://github.com/sysid/sse-starlette
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from uuid import UUID
@@ -59,6 +60,7 @@ from app.repositories.project_repo import ProjectRepo
 from app.schemas.enums import ACTION_TO_MESSAGE_TYPE, UserAction
 from app.schemas.message_schemas import SendMessageRequest
 from app.schemas.project_schemas import SendMessageResponse
+from app.utils.encryption import encrypt_token
 from app.tasks.build_worker import deploy_confirm_task, resume_workflow_task, start_workflow_task
 from app.agents.execution_registry import (
     ControlSignal,
@@ -178,7 +180,8 @@ async def send_message(
             project_id     = str(project_id),
             thread_id      = project.langgraph_thread_id,
             user_id        = str(current_user.id),
-            plaintext_vars = body.vars,
+            # Encrypted so the Redis broker never holds plaintext env vars
+            encrypted_vars = encrypt_token(json.dumps(body.vars)),
         )
 
         return {

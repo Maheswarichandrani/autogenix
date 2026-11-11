@@ -22,6 +22,7 @@ TWO CONCERNS:
                                         server fetches Railway key from DB automatically
                                         injects into Railway API → discards from RAM
 """
+import json
 import uuid
 import logging
 from fastapi import APIRouter, Depends, HTTPException
@@ -317,7 +318,8 @@ async def deploy_confirm(
         project_id     = str(project_id),
         thread_id      = project.langgraph_thread_id,
         user_id        = str(current_user.id),
-        plaintext_vars = body.plaintext_vars,
+        # Encrypted so the Redis broker never holds plaintext env vars
+        encrypted_vars = encrypt_token(json.dumps(body.plaintext_vars)),
     )
 
     # Wipe from local scope

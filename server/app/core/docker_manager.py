@@ -50,6 +50,28 @@ log = logging.getLogger(__name__)
 _client: docker.DockerClient | None = None
 
 
+class _ChunkReader(io.RawIOBase):
+    """File-like wrapper over the byte-chunk generator from get_archive()."""
+
+    def __init__(self, chunks) -> None:
+        self._chunks = iter(chunks)
+        self._buf = b""
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b) -> int:
+        while not self._buf:
+            try:
+                self._buf = next(self._chunks)
+            except StopIteration:
+                return 0
+        n = min(len(b), len(self._buf))
+        b[:n] = self._buf[:n]
+        self._buf = self._buf[n:]
+        return n
+
+
 def _docker() -> docker.DockerClient:
     """Lazy singleton Docker client."""
     global _client
@@ -445,6 +467,36 @@ class DockerManager:
             path = path[len("tmp/"):]
         _, output = self.exec(f"cat /workspace/{path}")
         return output
+
+    def read_workspace_files(self, paths: set[str]) -> dict[str, tuple[bytes, bool]]:
+        """
+        Read the raw bytes of selected files under /workspace.
+
+        Returns {relative_path: (content, is_executable)} for every requested
+        path that is a regular file. Symlinks, devices, directories and paths
+        not in `paths` are ignored. The archive is parsed in memory as a stream
+        and nothing is extracted to disk, so untrusted container content cannot
+        write to the worker's filesystem.
+        """
+        if not self.container:
+            raise RuntimeError("Container not started — call spin_up() first.")
+
+        stream, _ = self.container.get_archive("/workspace")
+        tar = tarfile.open(fileobj=_ChunkReader(stream), mode="r|")
+        files: dict[str, tuple[bytes, bool]] = {}
+        try:
+            for member in tar:
+                # Members are named "workspace/<path>"
+                _, _, rel = member.name.partition("/")
+                if not member.isreg() or rel not in paths:
+                    continue
+                fh = tar.extractfile(member)
+                if fh is None:
+                    continue
+                files[rel] = (fh.read(), bool(member.mode & 0o111))
+        finally:
+            tar.close()
+        return files
 
     def list_files(self) -> list[str]:
         _, out = self.exec("find /workspace -type f | sed 's|/workspace/||'")

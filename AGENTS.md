@@ -250,9 +250,9 @@ You cannot infer these from the code, so keep them in mind.
 
 **Fix before re-enabling Deployer:**
 
-- `push_to_github` puts the GitHub token in the git remote URL, so it is left in `.git/config` inside the container. The code comment claiming otherwise is wrong.
-- `create_github_repo` reuses an existing repo of the same name, and `push_to_github` then force-pushes. This can overwrite a user's repo.
-- `deploy_confirm_task` puts decrypted tokens into LangGraph state, which reaches checkpoints (Reference §6.7).
+- Fixed: `push_to_github` no longer gives the GitHub token to the container. It reads the workspace and pushes from the worker through the GitHub Git Data API, fast-forward only, and only to the signed-in user's own repo. Keep it that way: no git remote, credential helper, or env var carrying the token inside the sandbox.
+- Fixed: `create_github_repo` takes no name or visibility from the model. The name is `<slug>-<project id prefix>`, the repo is always private, and an existing repo is reused only if its description carries this project's `[autogenix:<project_id>]` marker.
+- Fixed: deploy secrets (GitHub token, Railway key, app env var values) never enter LangGraph state, Celery arguments, the LLM prompt, or tool inputs. `deploy_confirm_task` puts them in `agents/deploy_context.py` (process memory), `deployer_node` takes them, and the API Fernet-encrypts env vars before `.delay()`. That context only works while the deploy runs in the same process as the task; revisit it with any pool change.
 - The security verdict parser fails open (Reference §6.9).
 - `pkill` is missing from the `python:3.11-slim` and `node:22-slim` images, and `restart_app` hides that with `|| true`. The old app keeps running after a fix. Add `procps` to the `apt-get` line in `spin_up` before re-enabling the fix loop.
 
