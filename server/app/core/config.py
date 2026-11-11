@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
     GROQ_API_KEY: Optional[str] = None
+    # Model ids live here (AGENTS.md §10). Keys must exist in UnifiedLLM.MODELS.
+    AGENT_MODEL: str = "claude-sonnet-5-5"       # Artificer, fixer, Guardian, Deployer
+    CONDUCTOR_MODEL: str = "claude-haiku-4-5"    # chat vs build routing
 
     # Docker
     DOCKER_NETWORK: str = "autogenix_network"

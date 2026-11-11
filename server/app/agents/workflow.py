@@ -286,7 +286,7 @@ def conductor_node(state: GraphState) -> dict:
             messages.append(msg)
     messages.append({"role": "user", "content": user_message})
 
-    llm      = get_llm("claude-haiku-4-5")
+    llm      = get_llm(settings.CONDUCTOR_MODEL)
     response = llm.chat_with_tools(messages, _CONDUCTOR_TOOLS, max_tokens=2048, temperature=0)
 
     if not response.tool_calls:
@@ -518,7 +518,7 @@ def artificer_node(state: GraphState) -> dict:
                 user_prompt = f"Build this application:\n\n{build_description}",
                 tools       = tools,
                 max_iter    = 20,  # Increased from 5 to allow time for run_config generation
-                model       = "gpt-4o",
+                model       = settings.AGENT_MODEL,
             )
         except Exception as agent_error:
             log.error("React agent failed for project=%s: %s", project_id, agent_error)
@@ -533,7 +533,7 @@ def artificer_node(state: GraphState) -> dict:
                     user_prompt = f"Build this simple application:\n\n{build_description}",
                     tools       = tools,
                     max_iter    = 5,  # Reduced for fallback
-                    model       = "gpt-4o",
+                    model       = settings.AGENT_MODEL,
                 )
             except Exception as fallback_error:
                 error_msg = f"Agent execution failed: {agent_error}. Fallback also failed: {fallback_error}"
@@ -1031,7 +1031,7 @@ def guardian_node(state: GraphState) -> dict:
         user_prompt = f"Perform security testing on the application at {app_url}.",
         tools       = tools,
         max_iter    = 15,
-        model       = "gpt-4o",
+        model       = settings.AGENT_MODEL,
     )
 
     publish(project_id, {"type": "agent_done", "role": "guardian"})
@@ -1282,7 +1282,7 @@ def artificer_fix_node(state: GraphState) -> dict:
         user_prompt = "Fix the problem described in your instructions.",
         tools       = tools,
         max_iter    = 12,
-        model       = "gpt-4o",
+        model       = settings.AGENT_MODEL,
     )
 
     publish(project_id, {"type": "agent_done", "role": "artificer"})
@@ -1378,7 +1378,7 @@ def deployer_node(state: GraphState, config: RunnableConfig) -> dict:
         ),
         tools       = tools,
         max_iter    = 15,
-        model       = "gpt-4o",
+        model       = settings.AGENT_MODEL,
     )
 
     publish(project_id, {"type": "agent_done", "role": "deployer"})
