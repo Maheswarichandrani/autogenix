@@ -279,10 +279,24 @@ class DockerManager:
             if result.exit_code != 0:
                 log.warning("Failed to create /workspace: %s", result.output)
             
-            # Now we can use the regular exec method for other bootstrap commands
-            self.exec("apt-get update -qq && apt-get install -y -qq git curl 2>/dev/null")
         except Exception as e:
-            log.warning("Failed to bootstrap container %s: %s", self.container_name, e)
+            log.warning("Failed to create /workspace in %s: %s", self.container_name, e)
+
+        # Sandbox tools. curl runs the health check, procps provides pkill for
+        # restarts, git lists files for the deploy push. Without them every
+        # build would fail later with a misleading error, so fail loudly here.
+        # --no-install-recommends keeps this to seconds instead of minutes.
+        exit_code, output = self.exec(
+            "apt-get update -qq && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "
+            "git curl procps ca-certificates",
+            timeout=600,
+        )
+        if exit_code != 0:
+            raise RuntimeError(
+                f"Sandbox setup failed (could not install curl/procps/git, exit {exit_code}):\n"
+                f"{output[-1500:]}"
+            )
 
         log.info("Container %s started, host_port=%s", self.container_name, self.app_port)
         return self.container.id
@@ -525,12 +539,17 @@ class DockerManager:
             if self.container.status != "running":
                 raise RuntimeError(f"Container {self.container_name} is not running (status: {self.container.status})")
             
+            # The Docker SDK's exec_run has no timeout, so coreutils `timeout`
+            # enforces it inside the container (TERM, then KILL 5s later).
             result = self.container.exec_run(
-                ["/bin/sh", "-c", command],
+                ["timeout", "-k", "5", str(int(timeout)), "/bin/sh", "-c", command],
                 workdir=workdir,
                 demux=False,
             )
-            return result.exit_code, (result.output or b"").decode("utf-8", errors="replace")
+            output = (result.output or b"").decode("utf-8", errors="replace")
+            if result.exit_code in (124, 137):
+                return 124, output + f"\n[timed out after {int(timeout)}s]"
+            return result.exit_code, output
             
         except docker.errors.NotFound:
             raise RuntimeError(f"Container {self.container_name} no longer exists")

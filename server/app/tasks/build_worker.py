@@ -266,6 +266,20 @@ def _finalise_build(db: Session, state: dict) -> None:
     db.commit()
 
 
+def _finalise_if_escalated(wf, config: dict, db: Session, state: dict) -> None:
+    """
+    escalate_node parks the graph at conductor instead of END, so the normal
+    "reached END → finalise" path never runs for it. Mark the Build failed
+    here, then clear the per-build fields so the next build starts clean.
+    """
+    if not state.get("escalation_reason"):
+        return
+    _finalise_build(db, state)
+    wf.update_state(config, {"build_id": None, "escalation_reason": None})
+    state["build_id"] = None
+    state["escalation_reason"] = None
+
+
 def _stream_until_interrupt_or_end(wf, config: dict, db: Session, project_id: str) -> dict:
     """
     Drive the graph forward until it either:
@@ -379,6 +393,11 @@ def start_workflow_task(
             "run_config":           None,
             "app_url":              None,
             "security_iteration":   0,
+            "security_status":      None,
+            "startup_attempts":     0,
+            "verify_error":         None,
+            "fix_reason":           None,
+            "escalation_reason":    None,
             "security_issues":      [],
             "all_security_issues":  [],
             "artifacts":            [],
@@ -398,6 +417,7 @@ def start_workflow_task(
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
         wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -429,6 +449,11 @@ def start_workflow_task(
                 "run_config":           None,
                 "app_url":              None,
                 "security_iteration":   0,
+                "security_status":      None,
+                "startup_attempts":     0,
+                "verify_error":         None,
+                "fix_reason":           None,
+                "escalation_reason":    None,
                 "security_issues":      [],
                 "all_security_issues":  [],
                 "artifacts":            [],
@@ -523,6 +548,11 @@ def resume_workflow_task(
                 "run_config":           None,
                 "app_url":              None,
                 "security_iteration":   0,
+                "security_status":      None,
+                "startup_attempts":     0,
+                "verify_error":         None,
+                "fix_reason":           None,
+                "escalation_reason":    None,
                 "security_issues":      [],
                 "all_security_issues":  [],
                 "artifacts":            [],
@@ -537,6 +567,7 @@ def resume_workflow_task(
             state = _stream_until_interrupt_or_end(wf, config, db, project_id)
             _save_state_to_db(db, state, project_id, state.get("build_id"))
             wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+            _finalise_if_escalated(wf, config, db, state)
 
             snap = wf.get_state(config)
             if not snap.next:
@@ -559,6 +590,7 @@ def resume_workflow_task(
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
         wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -586,6 +618,11 @@ def resume_workflow_task(
                 "run_config":           None,
                 "app_url":              None,
                 "security_iteration":   0,
+                "security_status":      None,
+                "startup_attempts":     0,
+                "verify_error":         None,
+                "fix_reason":           None,
+                "escalation_reason":    None,
                 "security_issues":      [],
                 "all_security_issues":  [],
                 "artifacts":            [],
@@ -641,6 +678,7 @@ def railway_connect_task(self, project_id: str, thread_id: str) -> None:
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
         _save_state_to_db(db, state, project_id, state.get("build_id"))
         wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -754,6 +792,7 @@ def deploy_confirm_task(
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
         wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
         if not snap.next:

@@ -32,7 +32,8 @@ class Settings(BaseSettings):
     DOCKER_BASE_IMAGE: str = "python:3.11-slim"
 
 
-    MAX_SECURITY_ITERATIONS: int = 5   # max guardian↔artificer loops before giving up
+    MAX_SECURITY_ITERATIONS: int = 2   # Guardian → fix → retest rounds before escalating
+    MAX_STARTUP_FIX_ATTEMPTS: int = 3  # verify → fix → verify rounds before escalating
 
     
     class Config:
