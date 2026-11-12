@@ -21,13 +21,27 @@ import {
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuSeparator,
+    DropdownMenuSub,
+    DropdownMenuSubContent,
+    DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import Image from "next/image";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { projectsAPI } from "@/lib/api/projects";
+
+const SWITCH_PROJECT_LIMIT = 8;
+
 interface WorkspaceHeaderProps {
+    projectId?: string;
     projectName?: string;
+    repoUrl?: string | null;
+    onOpenSettings?: () => void;
     isBuilding?: boolean;
     activeTab?: string;
     onTabChange?: (tab: string) => void;
@@ -36,13 +50,34 @@ interface WorkspaceHeaderProps {
 }
 
 export function WorkspaceHeader({
+    projectId,
     projectName = "Untitled Project",
+    repoUrl,
+    onOpenSettings,
     isBuilding = false,
     activeTab = "ideal",
     onTabChange,
     onDeploy,
     onShare,
 }: WorkspaceHeaderProps) {
+    const router = useRouter();
+    const [switchOpen, setSwitchOpen] = useState(false);
+
+    // Fetched only once the Switch Project submenu is opened.
+    const otherProjects = useQuery({
+        queryKey: ["projects", "switcher"],
+        queryFn: async () => {
+            const res = await projectsAPI.list({ page: 1, limit: SWITCH_PROJECT_LIMIT + 1 });
+            if (res.error || !res.data) throw new Error(res.error ?? "Couldn't load projects");
+            return res.data.projects;
+        },
+        enabled: switchOpen,
+        staleTime: 30_000,
+    });
+    const switchable = (otherProjects.data ?? [])
+        .filter((p) => p.id !== projectId)
+        .slice(0, SWITCH_PROJECT_LIMIT);
+
     return (
         <header className="flex items-center justify-between h-14 px-4 border-b border-border bg-card/50 backdrop-blur-sm">
             {/* Left section - Project info */}
@@ -72,16 +107,57 @@ export function WorkspaceHeader({
                         </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" className="w-56">
-                        <DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => onOpenSettings?.()}>
                             <Settings className="h-4 w-4 mr-2" />
                             Project Settings
                         </DropdownMenuItem>
-                        <DropdownMenuItem>
+                        <DropdownMenuItem
+                            disabled={!repoUrl}
+                            onSelect={() => {
+                                if (repoUrl) window.open(repoUrl, "_blank", "noopener,noreferrer");
+                            }}
+                        >
                             <GitBranch className="h-4 w-4 mr-2" />
-                            View Repository
+                            <span className="flex-1">View Repository</span>
+                            {!repoUrl && (
+                                <span className="text-[10px] text-muted-foreground">Available after deploy</span>
+                            )}
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem>Switch Project</DropdownMenuItem>
+                        <DropdownMenuSub open={switchOpen} onOpenChange={setSwitchOpen}>
+                            <DropdownMenuSubTrigger>Switch Project</DropdownMenuSubTrigger>
+                            <DropdownMenuSubContent className="w-64 max-w-[calc(100vw-2rem)]">
+                                {otherProjects.isLoading ? (
+                                    <div className="space-y-2 p-2">
+                                        <Skeleton className="h-4 w-full" />
+                                        <Skeleton className="h-4 w-4/5" />
+                                        <Skeleton className="h-4 w-3/5" />
+                                    </div>
+                                ) : otherProjects.isError ? (
+                                    <DropdownMenuItem disabled>Couldn&apos;t load projects</DropdownMenuItem>
+                                ) : switchable.length === 0 ? (
+                                    <DropdownMenuItem disabled>No other projects</DropdownMenuItem>
+                                ) : (
+                                    switchable.map((p) => (
+                                        <DropdownMenuItem
+                                            key={p.id}
+                                            onSelect={() => router.push(`/project/${p.id}`)}
+                                        >
+                                            <span className="truncate">{p.name}</span>
+                                        </DropdownMenuItem>
+                                    ))
+                                )}
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onSelect={() => router.push("/home/projects")}>
+                                    <LayoutDashboard className="h-4 w-4 mr-2" />
+                                    All projects
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onSelect={() => router.push("/home")}>
+                                    <Sparkles className="h-4 w-4 mr-2" />
+                                    New project
+                                </DropdownMenuItem>
+                            </DropdownMenuSubContent>
+                        </DropdownMenuSub>
                     </DropdownMenuContent>
                 </DropdownMenu>
 

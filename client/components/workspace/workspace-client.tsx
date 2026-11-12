@@ -76,7 +76,10 @@ const WorkspaceClient = ({ initialProject }: WorkspaceClientProps) => {
   return (
     <WorkspaceActionsProvider value={workspaceActions}>
       <WorkspaceHeader
+        projectId={initialProject.id}
         projectName={initialProject.name}
+        repoUrl={initialProject.repo_url}
+        onOpenSettings={showSettings}
         isBuilding={["building", "thinking", "testing", "fixing"].includes(stage)}
         activeTab={currentState}
         onTabChange={handleTabChange}
