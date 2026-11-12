@@ -157,7 +157,8 @@ async def delete_railway_key(
 ):
     """Disconnect Railway — user will be prompted to reconnect on next deploy."""
     current_user.railway_api_key_encrypted = None
-    await db.flush()
+    # get_db does not auto-commit; flush alone would be rolled back.
+    await db.commit()
     return {"railway_connected": False, "message": "Railway disconnected"}
 
 
