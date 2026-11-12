@@ -1,6 +1,6 @@
 "use client";
 
-import { PanelLeft, PanelRight } from "lucide-react";
+import { Code2, PanelLeft } from "lucide-react";
 import { useSidebar } from "@/components/ui/sidebar";
 import { IconAction } from "./icon-action";
 import { ProjectMenu } from "./header/project-menu";
@@ -45,9 +45,16 @@ export function WorkspaceHeader({
       </div>
       {showShare && (
         <div className="flex shrink-0 items-center gap-1">
-          <IconAction label={onOpenCode ? "Code" : "No files yet"} onClick={onOpenCode} disabled={!onOpenCode}>
-            <PanelRight />
-          </IconAction>
+          <button
+            type="button"
+            onClick={onOpenCode}
+            disabled={!onOpenCode}
+            title={onOpenCode ? "Open the code" : "No files yet"}
+            className="inline-flex h-9 items-center gap-2 rounded-lg px-2.5 text-[15px] font-medium transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Code2 className="size-4.5" />
+            <span className="hidden sm:inline">Code</span>
+          </button>
           <ShareMenu deployUrl={deployUrl} repoUrl={repoUrl} />
         </div>
       )}
