@@ -2,6 +2,7 @@
 
 import React, { memo } from "react";
 import ReactMarkdown from "react-markdown";
+import { stripAgentMarkers } from "@/lib/agent-markers";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useTypewriter } from "@/hooks/use-typewriter";
@@ -33,7 +34,8 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
 }: StreamingMarkdownProps) {
   // Progressive text reveal — the core streaming fix.
   // charsPerFrame=3 ≈ 180 chars/sec at 60fps — natural reading speed.
-  const displayedText = useTypewriter(content, isStreaming, 3);
+  const visible = stripAgentMarkers(content);
+  const displayedText = useTypewriter(visible, isStreaming, 3);
 
   // During active streaming: simple text for smooth 60fps animation.
   // No markdown parsing overhead — just raw text with a blinking cursor.
@@ -101,7 +103,7 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
           },
         }}
       >
-        {content}
+        {visible}
       </ReactMarkdown>
     </div>
   );

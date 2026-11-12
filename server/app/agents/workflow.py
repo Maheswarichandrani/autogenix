@@ -978,6 +978,16 @@ TEST AREAS:
 5. Input validation — malformed/oversized inputs
 6. Source code review — hardcoded secrets, weak crypto
 
+RULES — your scan is rejected if you break these:
+- Find the endpoints first: GET /openapi.json (FastAPI) with http_request, or list_source_files / read_source_file.
+- Test every area that applies with REAL requests against the running app, using the tools.
+  Source review supports a finding; it never replaces a live test. "The source shows no SQL"
+  is not a test: send the injection payloads anyway and report what came back.
+- Send valid-format bodies (right field names, lengths and types) so the app's input
+  validation does not answer 422 before the logic you are testing runs. Use base_body on
+  run_sql_injection_scan and body on run_rate_limit_scan for this.
+- Evidence must quote a real response (status code and the relevant part of the body).
+
 REQUIRED: End your report with this verdict block on its own line. It is parsed by code.
 A report without a valid verdict block is treated as a FAILED scan.
 
@@ -992,6 +1002,36 @@ Example:
 Use "status": "issues" ONLY when at least one finding is CRITICAL or HIGH and actually exploitable.
 Otherwise use "status": "clean" (lower-severity findings may still be listed).
 """
+
+
+# Tools that send real HTTP requests to the running app.
+_LIVE_SECURITY_TOOLS  = {
+    "http_request", "run_sql_injection_scan", "run_auth_bypass_scan",
+    "run_rate_limit_scan", "check_security_headers",
+}
+# Tools that can deliver an attack payload of the agent's choosing.
+_ATTACK_SECURITY_TOOLS = {"http_request", "run_sql_injection_scan"}
+MIN_LIVE_SECURITY_CALLS = 3
+
+
+def _count_live_security_calls(tool_log: list | None) -> tuple[int, int]:
+    """
+    Return (live_calls, attack_calls) from Guardian's tool log.
+
+    A call counts as live only if at least one line of its output is not a
+    failure ("❌ ..."), i.e. the app actually answered.
+    """
+    live = attack = 0
+    for entry in tool_log or []:
+        if not isinstance(entry, dict) or entry.get("tool") not in _LIVE_SECURITY_TOOLS:
+            continue
+        lines = [ln for ln in str(entry.get("output") or "").splitlines() if ln.strip()]
+        if not any("❌" not in ln for ln in lines):
+            continue
+        live += 1
+        if entry["tool"] in _ATTACK_SECURITY_TOOLS:
+            attack += 1
+    return live, attack
 
 
 def guardian_node(state: GraphState) -> dict:
@@ -1031,7 +1071,7 @@ def guardian_node(state: GraphState) -> dict:
     publish(project_id, {"type": "agent_start", "role": "guardian"})
     _thinking(project_id, "Running security scans...", "guardian")
 
-    final_text, _ = run_react_agent(
+    final_text, tool_log = run_react_agent(
         project_id  = project_id,
         role        = "guardian",
         system      = system,
@@ -1042,6 +1082,19 @@ def guardian_node(state: GraphState) -> dict:
     )
 
     publish(project_id, {"type": "agent_done", "role": "guardian"})
+
+    # Fail closed: a verdict reached without testing the running app is not a scan.
+    live_calls, attack_calls = _count_live_security_calls(tool_log)
+    if live_calls < MIN_LIVE_SECURITY_CALLS or attack_calls == 0:
+        result = _invalid(
+            "Security scan did not test the running app "
+            f"({live_calls} live requests, {attack_calls} with attack payloads; "
+            f"need at least {MIN_LIVE_SECURITY_CALLS}, including one attack), "
+            "so the build cannot be marked safe."
+        )
+        if final_text:
+            result["messages_to_save"].insert(0, _msg("guardian", "assistant_response", final_text))
+        return result
 
     status, findings = _parse_security_verdict(final_text)
     if status == "invalid":

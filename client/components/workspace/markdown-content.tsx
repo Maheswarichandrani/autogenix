@@ -2,6 +2,7 @@
 
 import React from "react";
 import ReactMarkdown from "react-markdown";
+import { stripAgentMarkers } from "@/lib/agent-markers";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 
@@ -73,7 +74,7 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
           },
         }}
       >
-        {content}
+        {stripAgentMarkers(content)}
       </ReactMarkdown>
     </div>
   );
