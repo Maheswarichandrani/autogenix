@@ -80,6 +80,7 @@ def _resettable_list_add(left: list, right: list | None) -> list:
 
 from app.core.redis import publish
 from app.core.config import settings
+from app.agents.sandbox import ensure_sandbox, restore_project_files, saved_paths, sync_workspace_to_db
 from app.core.docker_manager import DockerManager, RunConfig
 from app.core.llm import get_llm
 from app.core.stacks import SUPPORTED_STACK_NAMES, get_stack, resolve_tech_stack
@@ -170,14 +171,76 @@ def _stream_text(project_id: str, text: str, role: str) -> None:
     publish(project_id, {"type": "agent_done", "role": role})
 
 
-def _msg(role: str, message_type: str, text: str) -> dict:
+MAX_SAVED_STEPS = 60
+
+
+def _steps_metadata(tool_log: list | None) -> dict | None:
+    """
+    Display copy of an agent's tool steps, saved with its message so the chat
+    can show the step summary after a reload. Only the truncated previews the
+    browser already received live: status text, redacted input, short result.
+    """
+    steps = []
+    for entry in (tool_log or [])[:MAX_SAVED_STEPS]:
+        if not isinstance(entry, dict):
+            continue
+        output = str(entry.get("output") or "")
+        steps.append({
+            "tool":     entry.get("tool", ""),
+            "status":   entry.get("status") or entry.get("tool", ""),
+            "is_error": bool(entry.get("is_error", output.startswith("❌"))),
+            "input":    str(entry.get("preview") or "")[:300],
+            "result":   output[:500],
+        })
+    files = _written_files(tool_log)
+    metadata = {}
+    if steps:
+        metadata["steps"] = steps
+    if files:
+        metadata["files"] = files
+    return metadata or None
+
+
+MAX_SAVED_FILES = 100
+
+
+def _written_files(tool_log: list | None) -> list[str]:
+    """
+    Workspace-relative paths this agent wrote and did not later delete, in
+    first-write order. Read from the tool input dict, never from the display
+    preview (which is redacted when the content mentions a secret).
+    """
+    from app.repositories.project_file_repo import normalise_path
+
+    files: list[str] = []
+    for entry in tool_log or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("input"), dict):
+            continue
+        if str(entry.get("output") or "").startswith("❌"):
+            continue
+        path = entry["input"].get("path")
+        if not isinstance(path, str) or not path.strip():
+            continue
+        path = normalise_path(path)
+        if entry.get("tool") == "write_file" and path not in files:
+            files.append(path)
+        elif entry.get("tool") == "delete_file" and path in files:
+            files.remove(path)
+    return files[:MAX_SAVED_FILES]
+
+
+def _msg(role: str, message_type: str, text: str, steps: list | None = None) -> dict:
     from datetime import datetime, timezone
-    return {
+    msg = {
         "role":         role,
         "message_type": message_type,
         "content":      [{"type": "text", "content": text}],
         "created_at":   datetime.now(timezone.utc).isoformat(),
     }
+    metadata = _steps_metadata(steps)
+    if metadata:
+        msg["metadata"] = metadata
+    return msg
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -195,6 +258,7 @@ Analyse the user's message and call EXACTLY ONE of the two tools:
 Project context:
   Name:        {project_name}
   Description: {project_description}
+  Existing code: {existing_code}
 
 User context:
   Default stack:   {default_stack}
@@ -212,6 +276,12 @@ Rules:
   yet, and list the supported stacks.
 - Match how much you explain to the developer level. Never change what gets built
   because of it.
+- If the project already has code, a request to add, change or fix something in it is a
+  build: call start_build and describe the change. The builder edits the existing files;
+  do not ask the user to share their code.
+- If the project Name is "New project", "Untitled Project" or starts with "Project for:", it is
+  a placeholder: also pass project_title, a 3-5 word Title Case name for what the user is
+  building (e.g. "Team Todo API", "Bookstore REST API"). Otherwise leave project_title out.
 - If the intent is ambiguous, use respond_to_user to ask one focused clarifying question.
 - Only respond correctly for backend related user queries.
 - if asked out of scope, politely decline and suggest focusing on backend topics.
@@ -219,6 +289,20 @@ Rules:
 """
 
 _DEVELOPER_LEVELS = ("beginner", "intermediate", "advanced", "founder")
+
+
+def _existing_code_summary(project_id: str) -> str:
+    """One line for the Conductor: which files this project already has."""
+    try:
+        paths = saved_paths(project_id)
+    except Exception:
+        log.exception("conductor: could not read saved files project=%s", project_id)
+        return "unknown (could not read saved files)"
+    if not paths:
+        return "none yet (new project)"
+    shown = ", ".join(paths[:15])
+    more = f", and {len(paths) - 15} more" if len(paths) > 15 else ""
+    return f"{len(paths)} files ({shown}{more})"
 
 _CONDUCTOR_TOOLS = [
     {
@@ -230,6 +314,10 @@ _CONDUCTOR_TOOLS = [
                 "description": {
                     "type": "string",
                     "description": "Detailed description of what to build.",
+                },
+                "project_title": {
+                    "type": "string",
+                    "description": "Only when the project Name is a placeholder: a 3-5 word Title Case name for the project, e.g. 'Team Todo API'. No quotes or emoji.",
                 },
                 "tech_stack": {
                     "type": "object",
@@ -251,11 +339,48 @@ _CONDUCTOR_TOOLS = [
             "type": "object",
             "properties": {
                 "message": {"type": "string", "description": "The response to send."},
+                "project_title": {
+                    "type": "string",
+                    "description": "Only when the project Name is a placeholder: a 3-5 word Title Case name for the project, e.g. 'Team Todo API'. No quotes or emoji.",
+                },
             },
             "required": ["message"],
         },
     },
 ]
+
+
+_TITLE_JUNK = re.compile(r"[\x00-\x1f\x7f\"'`*_#<>]")
+
+
+def _maybe_rename_project(project_id: str, title: object) -> None:
+    """
+    Give a placeholder-named project the Conductor's short title. A name the
+    user chose is never changed. Cosmetic: a failure is logged, never raised.
+    """
+    if not isinstance(title, str):
+        return
+    clean = " ".join(_TITLE_JUNK.sub("", title).split())[:60].strip()
+    if len(clean) < 2:
+        return
+    from app.models.project import Project
+    from app.repositories.project_repo import is_placeholder_name
+    from app.tasks.build_worker import _get_session  # lazy: avoids import cycle
+
+    db = _get_session()
+    try:
+        project = db.get(Project, project_id)
+        if project is None or not is_placeholder_name(project.name):
+            return
+        project.name = clean
+        db.commit()
+        publish(project_id, {"type": "project_renamed", "name": clean})
+        log.info("Project %s named %r", project_id, clean)
+    except Exception:
+        db.rollback()
+        log.exception("Could not rename project %s", project_id)
+    finally:
+        db.close()
 
 
 def conductor_node(state: GraphState) -> dict:
@@ -277,6 +402,7 @@ def conductor_node(state: GraphState) -> dict:
     system = CONDUCTOR_SYSTEM.format(
         project_name        = state.get("project_name", "Untitled"),
         project_description = state.get("project_description", ""),
+        existing_code       = _existing_code_summary(project_id),
         default_stack       = get_stack(preferred_stack).label,
         developer_level     = developer_level,
         supported_stacks    = SUPPORTED_STACK_NAMES,
@@ -310,6 +436,8 @@ def conductor_node(state: GraphState) -> dict:
     tc        = response.tool_calls[0]
     tool_name = tc["name"]
     tool_args = tc["args"]
+
+    _maybe_rename_project(project_id, tool_args.get("project_title"))
 
     if tool_name == "start_build":
         description = tool_args.get("description", user_message)
@@ -397,6 +525,30 @@ def route_after_conductor(state: GraphState) -> str:
 # NODE 2 — ARTIFICER
 # ═══════════════════════════════════════════════════════════════════
 
+def _sandbox(state: dict):
+    """The build's sandbox: started if stopped, recreated from saved files if gone."""
+    return ensure_sandbox(
+        project_id = state["project_id"],
+        build_id   = state.get("build_id", ""),
+        run_config = state.get("run_config"),
+        stack      = (state.get("tech_stack_hint") or {}).get("framework"),
+    )
+
+
+def _artificer_task(build_description: str, existing_files: list[str]) -> str:
+    """The Artificer's task message; on follow-ups it lists the project's existing code."""
+    if not existing_files:
+        return f"Build this application:\n\n{build_description}"
+    listing = "\n".join(f"- {p}" for p in sorted(existing_files)[:200])
+    return (
+        "This project already has code in /workspace (restored from earlier builds):\n"
+        f"{listing}\n\n"
+        "Read the files you need and change them to do what is asked. Do not start over "
+        "or rewrite files that do not need to change. Output a fresh RUN_CONFIG block as usual.\n\n"
+        f"Request:\n\n{build_description}"
+    )
+
+
 _ARTIFICER_SYSTEM = """\
 You are Artificer, an expert software engineer AI agent.
 
@@ -414,6 +566,8 @@ RULES:
 1. Write ALL files needed for a complete, working application.
 2. Start with dependency files (requirements.txt / package.json / go.mod / pom.xml), then source, then config.
 3. Always write COMPLETE files — never partial or placeholder content.
+   Create and change files ONLY with write_file — never with shell redirection (>, cat <<EOF),
+   sed, or editors. write_file is how the platform saves your code and shows it to the user.
 4. After writing files, install dependencies with exec_command.
 5. Run check_syntax on every Python/JS file you write. For Go and Java, run the build instead, because check_syntax skips those files.
 6. The app MUST listen on port 8080 (the PORT env var is already set to 8080).
@@ -513,6 +667,11 @@ def artificer_node(state: GraphState) -> dict:
             log.error("Failed to get Docker tools for project=%s: %s", project_id, tools_error)
             tools = []  # Continue with empty tools list
 
+        # Follow-up builds continue from the project's saved code, not a blank workspace.
+        # A failed restore raises: building over a half-restored workspace would be worse.
+        restored = restore_project_files(docker, project_id)
+        task = _artificer_task(build_description, docker.list_files() if restored else [])
+
         publish(project_id, {"type": "agent_start", "role": "artificer"})
         _thinking(project_id, "Writing code...", "artificer")
 
@@ -522,7 +681,7 @@ def artificer_node(state: GraphState) -> dict:
                 project_id  = project_id,
                 role        = "artificer",
                 system      = system_prompt,
-                user_prompt = f"Build this application:\n\n{build_description}",
+                user_prompt = task,
                 tools       = tools,
                 max_iter    = 20,  # Increased from 5 to allow time for run_config generation
                 model       = settings.AGENT_MODEL,
@@ -537,7 +696,7 @@ def artificer_node(state: GraphState) -> dict:
                     project_id  = project_id,
                     role        = "artificer",
                     system      = system_prompt,
-                    user_prompt = f"Build this simple application:\n\n{build_description}",
+                    user_prompt = task,
                     tools       = tools,
                     max_iter    = 5,  # Reduced for fallback
                     model       = settings.AGENT_MODEL,
@@ -614,7 +773,7 @@ def artificer_node(state: GraphState) -> dict:
             "build_id":        build_id,
             "run_config":      run_config_obj.to_dict() if run_config_obj else None,
             "app_url":         None,
-            "messages_to_save": [_msg("artificer", "assistant_response", final_text or "Build complete.")],
+            "messages_to_save": [_msg("artificer", "assistant_response", final_text or "Build complete.", tool_log)],
         }
 
     except Exception as e:
@@ -930,10 +1089,21 @@ def verify_node(state: GraphState) -> dict:
             "install_command, start_command and health_check_path for this app."
         )
 
-    docker = DockerManager.reattach(project_id=project_id, build_id=build_id, run_config=run_config_dict)
-    if not docker.container:
+    try:
+        docker = _sandbox(state).docker
+    except Exception as e:
         # Not a code problem the fixer can solve.
-        return {"error": "Build container no longer exists.", "verify_error": None}
+        log.exception("verify: sandbox unavailable build=%s", build_id)
+        return {"error": f"Build sandbox unavailable: {e}", "verify_error": None}
+
+    # The database is the source of truth: save the code exactly as it now is,
+    # including edits the agent made without write_file. Unsaved code would be
+    # lost when the sandbox is recreated, so a failure here stops the build.
+    try:
+        sync_workspace_to_db(docker, project_id)
+    except Exception as e:
+        log.exception("verify: could not save workspace project=%s", project_id)
+        return {"error": f"Could not save the generated code: {e}", "verify_error": None}
 
     try:
         app_url = docker.start_app()
@@ -941,6 +1111,8 @@ def verify_node(state: GraphState) -> dict:
         return _failed(str(e))
 
     publish(project_id, {"type": "step", "role": "artificer", "label": "App is running and healthy"})
+    # Lets the code panel preview the running sandbox (session only).
+    publish(project_id, {"type": "app_ready", "url": app_url})
     return {"app_url": app_url, "verify_error": None}
 
 
@@ -1040,7 +1212,6 @@ def guardian_node(state: GraphState) -> dict:
     app_url           = state.get("app_url")
     build_description = state.get("build_description", "")
     iteration         = state.get("security_iteration", 0)
-    run_config_dict   = state.get("run_config")
 
     _thinking(project_id, "Starting security analysis...", "guardian")
     publish(project_id, {"type": "stage_change", "stage": WorkflowStage.TESTING.value})
@@ -1056,9 +1227,18 @@ def guardian_node(state: GraphState) -> dict:
             "messages_to_save":   [_msg("guardian", "assistant_response", f"⚠️ {msg}")],
         }
 
-    docker = DockerManager.reattach(project_id=project_id, build_id=build_id, run_config=run_config_dict)
-    if not app_url or not docker.container:
-        return _invalid("Security scan could not run: the app or its container is not available.")
+    if not app_url:
+        return _invalid("Security scan could not run: the app is not available.")
+    try:
+        sandbox = _sandbox(state)
+        docker = sandbox.docker
+        if sandbox.state != "running":
+            # Started again or rebuilt: the app process (and host port) are new
+            app_url = docker.start_app()
+            publish(project_id, {"type": "app_ready", "url": app_url})
+    except Exception as sandbox_error:
+        log.exception("guardian: sandbox unavailable build=%s", build_id)
+        return _invalid(f"Security scan could not run: the app's sandbox is unavailable ({sandbox_error}).")
 
     try:
         tools = get_security_tools(docker, app_url)
@@ -1093,23 +1273,24 @@ def guardian_node(state: GraphState) -> dict:
             "so the build cannot be marked safe."
         )
         if final_text:
-            result["messages_to_save"].insert(0, _msg("guardian", "assistant_response", final_text))
+            result["messages_to_save"].insert(0, _msg("guardian", "assistant_response", final_text, tool_log))
         return result
 
     status, findings = _parse_security_verdict(final_text)
     if status == "invalid":
         result = _invalid("Security scan did not return a valid verdict, so the build cannot be marked safe.")
         result["messages_to_save"] = [
-            _msg("guardian", "assistant_response", final_text or "Security scan returned no report."),
+            _msg("guardian", "assistant_response", final_text or "Security scan returned no report.", tool_log),
         ]
         return result
 
     update = {
+        "app_url":             app_url,   # new if the sandbox had to be restarted
         "security_status":     status,
         "security_issues":     findings,
         "security_iteration":  iteration + 1,
         "all_security_issues": state.get("all_security_issues", []) + findings,
-        "messages_to_save":    [_msg("guardian", "assistant_response", final_text or "Security scan complete.")],
+        "messages_to_save":    [_msg("guardian", "assistant_response", final_text or "Security scan complete.", tool_log)],
     }
     if status == "issues":
         update["fix_reason"] = "security"
@@ -1293,7 +1474,8 @@ You are Artificer. Your app in /workspace needs fixing.
 
 FIX IT:
 1. Read each affected file first (read_file)
-2. Apply the fix
+2. Apply the fix by writing the complete file with write_file (never shell redirection,
+   sed or editors: write_file is how the platform saves your code)
 3. Run check_syntax after each edit
 4. Do NOT start or restart the app yourself. After you finish, the app is
    reinstalled, restarted and health-checked automatically.
@@ -1322,7 +1504,6 @@ def _fix_problem_text(state: GraphState) -> str:
 def artificer_fix_node(state: GraphState) -> dict:
     project_id      = state["project_id"]
     build_id        = state.get("build_id", "")
-    run_config_dict = state.get("run_config")
     fix_reason      = state.get("fix_reason") or "security"
 
     _thinking(
@@ -1332,9 +1513,11 @@ def artificer_fix_node(state: GraphState) -> dict:
     )
     publish(project_id, {"type": "stage_change", "stage": WorkflowStage.FIXING.value})
 
-    docker = DockerManager.reattach(project_id=project_id, build_id=build_id, run_config=run_config_dict)
-    if not docker.container:
-        return {"error": "Build container no longer exists, so fixes cannot be applied."}
+    try:
+        docker = _sandbox(state).docker
+    except Exception as e:
+        log.exception("artificer_fix: sandbox unavailable build=%s", build_id)
+        return {"error": f"Build sandbox unavailable, so fixes cannot be applied: {e}"}
 
     # .replace, not .format: the problem text holds JSON and logs with braces.
     system = _ARTIFICER_FIX_SYSTEM.replace("{problem}", _fix_problem_text(state))
@@ -1355,7 +1538,7 @@ def artificer_fix_node(state: GraphState) -> dict:
     publish(project_id, {"type": "agent_done", "role": "artificer"})
 
     update: dict = {
-        "messages_to_save": [_msg("artificer", "assistant_response", final_text or "Applied fixes.")],
+        "messages_to_save": [_msg("artificer", "assistant_response", final_text or "Applied fixes.", tool_log)],
     }
     new_run_config = _extract_run_config(tool_log) if tool_log else None
     if new_run_config:
@@ -1391,7 +1574,6 @@ Build description: {build_description}
 def deployer_node(state: GraphState, config: RunnableConfig) -> dict:
     project_id     = state["project_id"]
     build_id       = state.get("build_id", "")
-    run_config_dict = state.get("run_config")
 
     _thinking(project_id, "Starting deployment...", "deployer")
     publish(project_id, {"type": "stage_change", "stage": WorkflowStage.DEPLOYING.value})
@@ -1409,11 +1591,12 @@ def deployer_node(state: GraphState, config: RunnableConfig) -> dict:
         publish(project_id, {"type": "done"})
         return {"error": "deploy context missing"}
 
-    docker = DockerManager.reattach(
-        project_id = project_id,
-        build_id   = build_id,
-        run_config = run_config_dict,
-    )
+    try:
+        # Days may pass at the deploy card: the sandbox may be stopped or gone
+        docker = _sandbox(state).docker
+    except Exception as e:
+        log.exception("deployer: sandbox unavailable build=%s", build_id)
+        return {"error": f"Build sandbox unavailable, so the code cannot be pushed: {e}"}
 
     project_name = state.get("project_name", "autogenix-app")
     tools = get_deploy_tools(
@@ -1465,7 +1648,7 @@ def deployer_node(state: GraphState, config: RunnableConfig) -> dict:
     return {
         "repo_url":      repo_url,
         "deploy_url":    deploy_url,
-        "messages_to_save": [_msg("deployer", "assistant_response", final_text or "Deployment complete.")],
+        "messages_to_save": [_msg("deployer", "assistant_response", final_text or "Deployment complete.", tool_log)],
     }
 
 

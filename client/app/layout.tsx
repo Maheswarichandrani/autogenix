@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Urbanist, JetBrains_Mono } from "next/font/google";
+import { Urbanist, JetBrains_Mono, Source_Serif_4 } from "next/font/google";
 import { SessionProvider } from "@/providers/session-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "next-themes";
@@ -9,6 +9,13 @@ import TanstackClientProvider from "@/providers/query-client-provider";
 
 const urbanist = Urbanist({
   variable: "--font-urbanist",
+  subsets: ["latin"],
+  display: "swap",
+});
+
+// Agent reply text in the workspace chat
+const sourceSerif = Source_Serif_4({
+  variable: "--font-source-serif",
   subsets: ["latin"],
   display: "swap",
 });
@@ -32,7 +39,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
-        className={`${urbanist.variable} ${jetbrainsMono.variable} antialiased`}
+        className={`${urbanist.variable} ${jetbrainsMono.variable} ${sourceSerif.variable} antialiased`}
       >
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
           <SessionProvider>

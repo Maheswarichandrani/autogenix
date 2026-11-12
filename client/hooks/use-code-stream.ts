@@ -18,6 +18,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { useCodeStreamStore } from "@/store/code-stream-store";
+import { useWorkflowStore } from "@/store/workflow-store";
 import type { CodeStreamEvent } from "@/store/code-stream-store";
 import { projectsAPI } from "@/lib/api/projects";
 
@@ -87,6 +88,10 @@ export function useCodeStream(projectId: string) {
                 flushSync(() => {
                     handle(event);
                 });
+                // Lets the chat show a card per file under the agent writing it
+                if (event.type === "file_created" || event.type === "file_deleted") {
+                    useWorkflowStore.getState().noteFileEvent(event);
+                }
             } else {
                 handle(event);
             }

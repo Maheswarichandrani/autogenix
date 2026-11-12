@@ -1,120 +1,53 @@
 "use client";
 
 import { create } from "zustand";
-import { devtools } from "zustand/middleware";
 
-// Pipeline v2: Code panel, Settings, and Idle state
-export type RightSidebarState = 
-  | "idle"           // Empty state / ideal state
-  | "code"           // Code viewer (file tree + code)
-  | "settings";      // Settings panel
+/**
+ * The workspace's right-hand panel: the code view or project settings.
+ * Closed by default; the chat takes the full width until something opens it.
+ */
+export type RightSidebarState = "code" | "settings";
 
-// No complex payloads needed — code store manages its own state
-export type RightSidebarPayload = null;
+export type CodePanelView = "code" | "preview";
 
-// Store interface
 export interface RightSidebarStore {
   currentState: RightSidebarState;
-  payload: RightSidebarPayload;
   isVisible: boolean;
-  
-  showCode: () => void;
+  /** Panel takes the full width and the chat is hidden */
+  expanded: boolean;
+  /** File shown in the code view (a path from the code stream store) */
+  codePath: string | null;
+  codeView: CodePanelView;
+
+  showCode: (path?: string) => void;
   showSettings: () => void;
-  setIdle: () => void;
   hide: () => void;
-  toggle: () => void;
-  
-  isState: (state: RightSidebarState) => boolean;
+  toggleExpanded: () => void;
+  setCodePath: (path: string) => void;
+  setCodeView: (view: CodePanelView) => void;
 }
 
-// Create the store
-export const useRightSidebar = create<RightSidebarStore>()(
-  devtools(
-    (set, get) => ({
-      // Initial state
-      currentState: "idle",
-      payload: null,
-      isVisible: false,
+export const useRightSidebar = create<RightSidebarStore>()((set) => ({
+  currentState: "code",
+  isVisible: false,
+  expanded: false,
+  codePath: null,
+  codeView: "code",
 
-      showCode: () =>
-        set(
-          { 
-            currentState: "code", 
-            payload: null, 
-            isVisible: true 
-          },
-          false,
-          "showCode"
-        ),
+  showCode: (path) =>
+    set((s) => ({
+      currentState: "code",
+      isVisible: true,
+      codePath: path ?? s.codePath,
+    })),
 
-      showSettings: () =>
-        set(
-          { 
-            currentState: "settings", 
-            payload: null, 
-            isVisible: true 
-          },
-          false,
-          "showSettings"
-        ),
+  showSettings: () => set({ currentState: "settings", isVisible: true }),
 
-      setIdle: () =>
-        set(
-          { 
-            currentState: "idle", 
-            payload: null, 
-            isVisible: true 
-          },
-          false,
-          "setIdle"
-        ),
+  hide: () => set({ isVisible: false, expanded: false }),
 
-      hide: () =>
-        set(
-          { 
-            isVisible: false 
-          },
-          false,
-          "hide"
-        ),
+  toggleExpanded: () => set((s) => ({ expanded: !s.expanded })),
 
-      toggle: () =>
-        set(
-          (state) => ({ 
-            isVisible: !state.isVisible 
-          }),
-          false,
-          "toggle"
-        ),
+  setCodePath: (path) => set({ codePath: path }),
 
-      // Utility functions
-      isState: (state) => get().currentState === state,
-    }),
-    {
-      name: "right-sidebar-store",
-    }
-  )
-);
-
-// Selector hooks for easier usage
-export const useRightSidebarState = () => useRightSidebar((state) => state.currentState);
-export const useRightSidebarVisible = () => useRightSidebar((state) => state.isVisible);
-
-// Action hooks
-export const useRightSidebarActions = () => {
-  const {
-    showCode,
-    showSettings,
-    setIdle,
-    hide,
-    toggle,
-  } = useRightSidebar();
-
-  return {
-    showCode,
-    showSettings,
-    setIdle,
-    hide,
-    toggle,
-  };
-};
+  setCodeView: (view) => set({ codeView: view }),
+}));

@@ -40,6 +40,7 @@ import logging
 from datetime import datetime, timezone
 
 from celery import Celery
+from celery.signals import worker_ready
 from langgraph.types import Command
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import sessionmaker, Session
@@ -51,6 +52,21 @@ log = logging.getLogger(__name__)
 # ── Celery app ────────────────────────────────────────────────────
 
 celery_app = Celery("autogenix", broker=settings.REDIS_URL, backend=settings.REDIS_URL)
+
+
+@worker_ready.connect
+def _sweep_sandboxes_on_start(**_kwargs) -> None:
+    """Tidy build sandboxes left from before this worker started."""
+    from app.tasks.container_sweep import sweep_sandboxes
+    db = _get_session()
+    try:
+        stats = sweep_sandboxes(db)
+        log.info("Sandbox sweep: %s", stats)
+    except Exception:
+        # Docker down or DB unreachable: builds will report it themselves
+        log.exception("Sandbox sweep failed")
+    finally:
+        db.close()
 celery_app.conf.update(
     task_serializer            = "json",
     result_serializer          = "json",
@@ -167,6 +183,10 @@ def _create_build(db: Session, project_id: str, description: str = "") -> str:
     db.add(build)
     db.flush()   # get build.id before commit
     db.commit()
+
+    # The new build replaces older ones; their code lives on in project_files
+    from app.tasks.container_sweep import remove_superseded_sandboxes
+    remove_superseded_sandboxes(db, project_id, str(build.id))
     return str(build.id)
 
 
@@ -368,6 +388,11 @@ def _stream_until_interrupt_or_end(wf, config: dict, db: Session, project_id: st
                 db, project_id, build_id, "env_var_request", ENV_VAR_REQUEST_TITLE,
                 env_var_request_content(build_id, state.get("build_description", "")),
             )
+            # Waiting on the user (maybe for days): free the sandbox's CPU and RAM.
+            # The deployer starts it again (or rebuilds it from saved files).
+            if build_id:
+                from app.tasks.container_sweep import stop_sandbox
+                stop_sandbox(build_id)
 
         # Stopped at interrupt or reached END
         if not next_nodes or "conductor" in next_nodes or "deployer" in next_nodes:

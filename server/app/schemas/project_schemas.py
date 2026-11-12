@@ -1,5 +1,5 @@
 from .base import BModel
-from typing import List, Optional
+from typing import Literal, List, Optional
 from datetime import datetime
 from uuid import UUID
 
@@ -42,6 +42,9 @@ class ProjectResponse(BModel):
     # Git & Deployment
     repo_url: Optional[str] = None
     latest_deploy_url: Optional[str] = None
+
+    # Only set by the list endpoint: building | awaiting_deploy | deployed
+    activity: Optional[Literal["building", "awaiting_deploy", "deployed"]] = None
     
     # LangGraph integration
     langgraph_thread_id: Optional[str] = None
