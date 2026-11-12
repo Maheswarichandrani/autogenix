@@ -259,13 +259,18 @@ export function useWorkflow(projectId: string) {
       if (action.action === "agent_continue" || action.action === "agent_switch_model" || action.action === "agent_cancel") {
         return {};
       }
-      if ("content" in action && action.content) {
+      // Mirrors the text the server stores for provide_env_vars — never the values.
+      const text =
+        action.action === "provide_env_vars"
+          ? "Submitted environment variables for deployment."
+          : "content" in action ? action.content : "";
+      if (text) {
         const tempId = `temp-${Date.now()}`;
         addOptimisticMessage({
           id: tempId,
           role: "user",
           message_type: "user_prompt",
-          content: [{ type: "text", content: action.content }],
+          content: [{ type: "text", content: text }],
           created_at: new Date().toISOString(),
         });
         return { tempId };
@@ -313,6 +318,11 @@ export function useWorkflow(projectId: string) {
     sendAction: (action: UserAction) => {
       ensureSSEConnected();
       sendMutation.mutate(action);
+    },
+    // Same path as sendAction, but the caller can await success or failure.
+    sendActionAsync: async (action: UserAction) => {
+      ensureSSEConnected();
+      await sendMutation.mutateAsync(action);
     },
   };
 }

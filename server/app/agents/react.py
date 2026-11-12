@@ -184,7 +184,11 @@ def _run_one_iteration(
 
     # ── Tool call(s) ──────────────────────────────────────────
     if response.tool_calls:
-        if provider == LLMProvider.ANTHROPIC:
+        if provider == LLMProvider.ANTHROPIC and response.raw_content:
+            # Send the turn back exactly as returned, thinking blocks included.
+            # Rebuilding it would drop them and break preserved thinking.
+            messages.append({"role": "assistant", "content": response.raw_content})
+        elif provider == LLMProvider.ANTHROPIC:
             content_blocks = []
             if response.content:
                 content_blocks.append({"type": "text", "text": response.content})

@@ -8,7 +8,8 @@ TWO CONCERNS:
    POST /account/railway-key       — save Railway API key (server-side encrypted)
    
    Railway key flow:
-     User pastes key in the inline connect_railway card → POST /account/railway-key
+     User pastes key in the deploy card → POST /account/railway-key (save only),
+     then the card sends provide_env_vars, which resumes the deployer
      Server encrypts with PLATFORM_ENCRYPTION_KEY → stored in user.railway_api_key_encrypted
      Every future deploy: server decrypts automatically, user never prompted again
 
@@ -22,6 +23,7 @@ TWO CONCERNS:
                                         server fetches Railway key from DB automatically
                                         injects into Railway API → discards from RAM
 """
+import json
 import uuid
 import logging
 from fastapi import APIRouter, Depends, HTTPException
@@ -115,7 +117,7 @@ async def save_railway_key(
     AFTER THIS CALL:
     - All future deploys use this key automatically
     - User never prompted for Railway key again
-    - deployer_node will find it in DB and proceed without interrupting
+    - deploy_confirm_task will find it in DB and proceed without interrupting
     """
     if not body.railway_api_key or not body.railway_api_key.strip():
         raise HTTPException(status_code=400, detail="Railway API key cannot be empty")
@@ -134,29 +136,13 @@ async def save_railway_key(
     key  = None
     del body
 
-    await db.flush()
+    # get_db does not auto-commit; without this the key is silently dropped.
+    await db.commit()
 
-    # ── If a build is currently waiting for this key, resume it ───
-    # Find the user's most recently active project with a paused deployer.
-    # railway_connect_task will check if the graph is actually paused at deployer —
-    # if not, it's a no-op (key saved for future use).
-    from sqlalchemy import select
-    from app.models import Project
-    result = await db.execute(
-        select(Project)
-        .where(Project.user_id == current_user.id, Project.status == "active")
-        .order_by(Project.updated_at.desc())
-        .limit(1)
-    )
-    active_project = result.scalar_one_or_none()
-
-    if active_project and active_project.langgraph_thread_id:
-        from app.tasks.build_worker import railway_connect_task
-        railway_connect_task.delay(
-            project_id = str(active_project.id),
-            thread_id  = active_project.langgraph_thread_id,
-        )
-        log.info("Triggered railway_connect_task project=%s", active_project.id)
+    # Saving the key does not resume anything. The deploy card saves the key
+    # first and then sends provide_env_vars, which carries the app env vars
+    # the deployer needs. Resuming here would reach the deployer with no
+    # deploy context, and would have to guess which project to resume.
 
     return {
         "railway_connected": True,
@@ -171,7 +157,8 @@ async def delete_railway_key(
 ):
     """Disconnect Railway — user will be prompted to reconnect on next deploy."""
     current_user.railway_api_key_encrypted = None
-    await db.flush()
+    # get_db does not auto-commit; flush alone would be rolled back.
+    await db.commit()
     return {"railway_connected": False, "message": "Railway disconnected"}
 
 
@@ -317,7 +304,8 @@ async def deploy_confirm(
         project_id     = str(project_id),
         thread_id      = project.langgraph_thread_id,
         user_id        = str(current_user.id),
-        plaintext_vars = body.plaintext_vars,
+        # Encrypted so the Redis broker never holds plaintext env vars
+        encrypted_vars = encrypt_token(json.dumps(body.plaintext_vars)),
     )
 
     # Wipe from local scope

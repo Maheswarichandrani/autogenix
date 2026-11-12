@@ -25,8 +25,15 @@ export const API_ENDPOINTS = {
     list: "/api/v1/projects",
     create: "/api/v1/projects",
     byId: (id: string) => `/api/v1/projects/${id}`,
+    files: (id: string) => `/api/v1/projects/${id}/files`,
     update: (id: string) => `/api/v1/projects/${id}`,
     delete: (id: string) => `/api/v1/projects/${id}`,
+  },
+
+  // Account credentials (status only — never tokens)
+  account: {
+    credentials: "/api/v1/account/credentials",
+    railwayKey: "/api/v1/account/railway-key",
   },
 
   // Messages & Workflow

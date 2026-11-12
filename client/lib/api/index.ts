@@ -9,6 +9,7 @@ export * from "./config";
 export * from "./users";
 export * from "./projects";
 export * from "./messages";
+export * from "./account";
 
 /**
  * Usage examples:

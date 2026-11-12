@@ -59,6 +59,12 @@ interface CodeStreamStore {
     /** Reset all state (on project change or unmount) */
     reset: () => void;
 
+    /**
+     * Load the files stored on the server (GET /projects/:id/files).
+     * Files already received live are kept, since they are at least as new.
+     */
+    seedFiles: (files: Array<{ path: string; content: string; size: number }>) => void;
+
     /** Open a specific file by its path-based ID */
     openFile: (fileId: string) => void;
 
@@ -265,6 +271,26 @@ export const useCodeStreamStore = create<CodeStreamStore>()(
                 set({
                     ...INITIAL_STATE,
                     fileMap: new Map(),  // new reference
+                });
+            },
+
+            seedFiles: (files) => {
+                set((s) => {
+                    const newMap = new Map<string, { content: string; lines: number; size: number }>();
+                    for (const f of files) {
+                        newMap.set(f.path, {
+                            content: f.content,
+                            lines: f.content.split("\n").length,
+                            size: f.size,
+                        });
+                    }
+                    // Live events that arrived while the request was in flight win.
+                    s.fileMap.forEach((v, k) => newMap.set(k, v));
+                    return {
+                        fileMap: newMap,
+                        fileTree: buildFileTree(newMap),
+                        fileCount: newMap.size,
+                    };
                 });
             },
 

@@ -44,10 +44,33 @@ from app.models import build  # noqa: E402
 from app.models import artifact  # noqa: E402
 
 async def init_db() -> None:
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """
+    Refuse to start unless the database is at the Alembic head.
 
-    print("✅ Database tables created successfully!")
+    Tables are created and changed only by `alembic upgrade head`. The API
+    used to run create_all here, which built tables outside Alembic and let
+    the database drift from the migration history.
+    """
+    from pathlib import Path
+
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+
+    alembic_ini = Path(__file__).resolve().parents[2] / "alembic.ini"
+    expected = set(ScriptDirectory.from_config(Config(str(alembic_ini))).get_heads())
+
+    async with engine.connect() as conn:
+        current = set(await conn.run_sync(
+            lambda sync_conn: MigrationContext.configure(sync_conn).get_current_heads()
+        ))
+
+    if current != expected:
+        raise RuntimeError(
+            f"Database is at {sorted(current) or 'no revision'}, expected {sorted(expected)}. "
+            "Run: alembic upgrade head"
+        )
+    print(f"Database schema is at Alembic head {', '.join(sorted(expected))}")
 
 async def close_db() -> None:
     await engine.dispose()

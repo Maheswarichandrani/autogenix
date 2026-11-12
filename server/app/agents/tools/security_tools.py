@@ -62,11 +62,14 @@ def get_security_tools(docker: DockerManager, app_url: str):
             return f"❌ Request failed: {e}"
 
     @tool
-    def run_sql_injection_scan(endpoint: str, param: str) -> str:
+    def run_sql_injection_scan(endpoint: str, param: str, method: str = "POST", base_body: str = "") -> str:
         """
         Run SQL injection payloads against a specific endpoint and parameter.
         endpoint: e.g. "/users" or "/auth/login"
         param: the parameter name to inject into e.g. "username" or "id"
+        method: "POST" sends a JSON body, "GET" sends a query string (default POST)
+        base_body: JSON string of the other valid fields to send alongside the payload,
+                   e.g. '{"password": "Passw0rd!x"}', so validation does not reject the request
         Returns results of multiple injection attempts.
         """
         payloads = [
@@ -76,15 +79,20 @@ def get_security_tools(docker: DockerManager, app_url: str):
             "1 UNION SELECT * FROM users --",
             "' OR 1=1 LIMIT 1 --",
         ]
+        try:
+            base = json.loads(base_body) if base_body else {"password": "x"}
+        except json.JSONDecodeError as e:
+            return f"❌ Request failed: base_body is not valid JSON ({e})"
+        verb    = method.upper()
         results = []
         for payload in payloads:
+            fields = {**base, param: payload}
             try:
-                resp = requests.post(
-                    f"{app_url}{endpoint}",
-                    json    = {param: payload, "password": "x"},
-                    timeout = 5,
-                )
-                suspicious = resp.status_code == 200 or "error" in resp.text.lower() and "sql" in resp.text.lower()
+                if verb == "GET":
+                    resp = requests.get(f"{app_url}{endpoint}", params=fields, timeout=5)
+                else:
+                    resp = requests.request(verb, f"{app_url}{endpoint}", json=fields, timeout=5)
+                suspicious = resp.status_code == 200 or ("error" in resp.text.lower() and "sql" in resp.text.lower())
                 results.append(f"Payload: {payload!r} → Status {resp.status_code} {'⚠️ SUSPICIOUS' if suspicious else '✅ OK'}")
             except Exception as e:
                 results.append(f"Payload: {payload!r} → ❌ Error: {e}")
@@ -119,13 +127,20 @@ def get_security_tools(docker: DockerManager, app_url: str):
         return "\n".join(results)
 
     @tool
-    def run_rate_limit_scan(endpoint: str, method: str = "POST") -> str:
+    def run_rate_limit_scan(endpoint: str, method: str = "POST", body: str = "") -> str:
         """
         Test if an endpoint has rate limiting by sending many requests quickly.
         endpoint: e.g. "/auth/login"
         method: HTTP method e.g. "POST"
+        body: JSON string to send each time. Use a valid-format body (e.g. a real
+              username shape with a wrong password) so validation does not answer
+              422 before the rate limiter is reached. Default: {"username": "test<i>", "password": "wrong"}
         Returns whether rate limiting is detected.
         """
+        try:
+            fixed_body = json.loads(body) if body else None
+        except json.JSONDecodeError as e:
+            return f"❌ Request failed: body is not valid JSON ({e})"
         results    = []
         hit_limit  = False
         for i in range(20):
@@ -133,7 +148,7 @@ def get_security_tools(docker: DockerManager, app_url: str):
                 resp = requests.request(
                     method  = method.upper(),
                     url     = f"{app_url}{endpoint}",
-                    json    = {"username": f"test{i}", "password": "wrong"},
+                    json    = fixed_body if fixed_body is not None else {"username": f"test{i}", "password": "wrong"},
                     timeout = 3,
                 )
                 if resp.status_code == 429:

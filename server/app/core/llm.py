@@ -52,6 +52,12 @@ class LLMConfig:
     max_tokens: int = 4096
     temperature: float = 0.0
     timeout: int = 30
+    # Set for models with always-on adaptive thinking (Claude Sonnet 5.5).
+    # The Anthropic provider then sends output_config.effort, sends no
+    # temperature (non-default sampling values are a 400 on these models),
+    # never lowers max_tokens below this config's value (thinking counts
+    # toward it), and enables server-side refusal fallback.
+    effort: Optional[str] = None
 
 
 @dataclass
@@ -66,7 +72,11 @@ class LLMResponse:
     content: str
     role: str = "assistant"
     tool_calls: List[Dict] = None
-    
+    # Anthropic only: every response content block as a dict, including
+    # thinking blocks. Callers building tool-loop history must send this
+    # back unchanged as the assistant turn (preserved thinking).
+    raw_content: Optional[List[Dict]] = None
+
     def __post_init__(self):
         if self.tool_calls is None:
             self.tool_calls = []
@@ -169,42 +179,56 @@ class AnthropicProvider(BaseLLMProvider):
                 "input_schema": tool["parameters"]
             })
         
-        # Retry with exponential backoff for 429 rate-limit errors.
-        # Anthropic free/low tiers have aggressive per-minute token limits.
+        params: Dict[str, Any] = {
+            "model":       self.config.model,
+            "max_tokens":  kwargs.get("max_tokens", self.config.max_tokens),
+            "system":      system,
+            "messages":    anthropic_messages,
+            "tools":       anthropic_tools,
+            "tool_choice": {"type": "auto"},
+        }
+        if self.config.effort:
+            # Thinking model: no sampling params, effort instead, and room
+            # for thinking + reply. Refusals fall back server-side to a model
+            # that may accept the request (e.g. Guardian's injection payloads).
+            params["max_tokens"]    = max(params["max_tokens"], self.config.max_tokens)
+            params["output_config"] = {"effort": self.config.effort}
+            create = lambda: self.client.beta.messages.create(  # noqa: E731
+                betas=["server-side-fallback-2026-07-01"],
+                extra_body={"fallbacks": "default"},
+                **params,
+            )
+        else:
+            params["temperature"] = kwargs.get("temperature", self.config.temperature)
+            create = lambda: self.client.messages.create(**params)  # noqa: E731
+
+        # Retry with exponential backoff on real 429s only.
         max_retries = 5
         for attempt in range(max_retries):
             try:
-                response = self.client.messages.create(
-                    model=self.config.model,
-                    max_tokens=kwargs.get("max_tokens", self.config.max_tokens),
-                    temperature=kwargs.get("temperature", self.config.temperature),
-                    system=system,
-                    messages=anthropic_messages,
-                    tools=anthropic_tools,
-                    tool_choice={"type": "auto"},
-                )
-                break  # success
-            except Exception as e:
-                error_str = str(e)
-                is_rate_limit = "429" in error_str or "rate" in error_str.lower() or "too many" in error_str.lower()
-                if is_rate_limit and attempt < max_retries - 1:
-                    wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s
-                    log.warning(
-                        "Anthropic 429 rate-limit on attempt %d/%d — retrying in %ds",
-                        attempt + 1, max_retries, wait,
-                    )
-                    time.sleep(wait)
-                else:
+                response = create()
+                break
+            except anthropic.RateLimitError:
+                if attempt == max_retries - 1:
                     raise
-        
-        # Extract tool calls and text from response content blocks.
-        # Anthropic returns a list of content blocks: "text" and "tool_use".
-        # We must capture ALL tool_use blocks — each one is a separate tool call
-        # with its own unique 'id' that the next user message must reference
-        # via a tool_result block.
+                wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s
+                log.warning(
+                    "Anthropic 429 rate-limit on attempt %d/%d — retrying in %ds",
+                    attempt + 1, max_retries, wait,
+                )
+                time.sleep(wait)
+
+        if response.stop_reason == "refusal":
+            details  = getattr(response, "stop_details", None)
+            category = getattr(details, "category", None) or "unknown"
+            reason   = getattr(details, "explanation", None) or "no explanation given"
+            raise RuntimeError(f"Model declined the request ({category}): {reason}")
+
+        # Read blocks by type: a response can start with thinking blocks.
+        # Capture ALL tool_use blocks — each needs its own tool_result.
         tool_calls = []
         content = ""
-        
+
         for block in response.content:
             if block.type == "text":
                 content += block.text
@@ -214,11 +238,12 @@ class AnthropicProvider(BaseLLMProvider):
                     "name": block.name,
                     "args": block.input,
                 })
-        
+
         return LLMResponse(
             content=content,
             role="assistant",
-            tool_calls=tool_calls
+            tool_calls=tool_calls,
+            raw_content=[b.model_dump(mode="json", exclude_none=True) for b in response.content],
         )
 
 
@@ -449,6 +474,13 @@ class UnifiedLLM:
     # Predefined model configurations
     MODELS = {
         # Anthropic models
+        "claude-sonnet-5-5": LLMConfig(
+            provider=LLMProvider.ANTHROPIC,
+            model="claude-sonnet-5-5",
+            api_key=settings.ANTHROPIC_API_KEY,
+            max_tokens=16000,      # thinking counts toward it; non-streaming ceiling
+            effort="medium",       # guide's starting point for agentic coding / tool use
+        ),
         "claude-haiku-4-5": LLMConfig(
             provider=LLMProvider.ANTHROPIC,
             model="claude-haiku-4-5",

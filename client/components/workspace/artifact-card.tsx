@@ -4,6 +4,7 @@ import React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FileCode } from "lucide-react";
+import { DeployCard } from "./deploy-card";
 
 interface ArtifactCardProps {
   artifactType: string;
@@ -11,8 +12,14 @@ interface ArtifactCardProps {
   content: unknown;
 }
 
+const DEPLOY_CARD_TYPES = new Set(["env_var_request", "connect_railway"]);
+
 export function ArtifactCard({ artifactType, title, content }: ArtifactCardProps) {
-  // Generic artifact display — pipeline v2 has no plan artifacts
+  if (DEPLOY_CARD_TYPES.has(artifactType)) {
+    return <DeployCard title={title} content={content} />;
+  }
+
+  // Generic artifact display for every other type
   return (
     <Card className="border-primary/20">
       <CardHeader className="pb-3">

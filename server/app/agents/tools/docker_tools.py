@@ -17,8 +17,25 @@ import logging
 from langchain_core.tools import tool
 from app.core.docker_manager import DockerManager
 from app.core.redis import publish_code
+from app.repositories import project_file_repo
 
 log = logging.getLogger(__name__)
+
+
+def _store(action, project_id: str, *args) -> None:
+    """
+    Write-through to project_files so the code survives the container.
+    A DB failure is logged loudly but does not fail the agent's tool call.
+    """
+    from app.tasks.build_worker import _get_session  # lazy: avoids import cycle
+    db = _get_session()
+    try:
+        action(db, project_id, *args)
+    except Exception:
+        log.exception("Could not store file change for project=%s", project_id)
+        db.rollback()
+    finally:
+        db.close()
 
 
 def get_docker_tools(docker: DockerManager, project_id: str | None = None) -> list:
@@ -65,13 +82,17 @@ def get_docker_tools(docker: DockerManager, project_id: str | None = None) -> li
             docker.write_file(path, content)
             lines = len(content.splitlines())
             size  = len(content.encode("utf-8"))
+            rel   = project_file_repo.normalise_path(path)
+
+            if project_id:
+                _store(project_file_repo.upsert_file, project_id, rel, content)
 
             # Publish file_created event to the code stream channel
             if project_id:
                 try:
                     publish_code(project_id, {
                         "type":    "file_created",
-                        "path":    path,
+                        "path":    rel,
                         "content": content,
                         "lines":   lines,
                         "size":    size,
@@ -164,12 +185,16 @@ def get_docker_tools(docker: DockerManager, project_id: str | None = None) -> li
         try:
             exit_code, output = docker.exec(f"rm -f /workspace/{path}")
             if exit_code == 0:
+                rel = project_file_repo.normalise_path(path)
+                if project_id:
+                    _store(project_file_repo.delete_file, project_id, rel)
+
                 # Publish file_deleted event to the code stream channel
                 if project_id:
                     try:
                         publish_code(project_id, {
                             "type": "file_deleted",
-                            "path": path,
+                            "path": rel,
                         })
                     except Exception as pub_err:
                         log.warning("Failed to publish file_deleted for %s: %s", path, pub_err)

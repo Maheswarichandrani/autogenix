@@ -21,6 +21,14 @@ class ProjectUpdate(BModel):
     latest_deploy_url: str | None = None
 
 
+class ProjectFileResponse(BModel):
+    """One stored file of the generated app, for the code panel."""
+    path: str
+    content: str
+    size: int
+    updated_at: Optional[datetime] = None
+
+
 class ProjectResponse(BModel):
     """Schema for project response."""
     id: UUID

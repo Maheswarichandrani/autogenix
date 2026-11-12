@@ -25,7 +25,11 @@ class Build(Base):
     repo_url: Mapped[str] = mapped_column(String, nullable=True)
     error_message: Mapped[str] = mapped_column(Text, nullable=True)
     progress: Mapped[dict] = mapped_column(JSONB, nullable=True, default=dict)
-    
+
+    # Holds run_config for cross-node reattach. "metadata" is reserved by
+    # SQLAlchemy Declarative, so the attribute is metadata_ (like Message).
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, nullable=True)
+
     # Timing
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -6,6 +6,13 @@
 
 import { apiFetch } from "./fetch";
 import { API_ENDPOINTS } from "./config";
+
+export interface ProjectFile {
+  path: string;
+  content: string;
+  size: number;
+  updated_at: string | null;
+}
 import type {
   Project,
   CreateProjectData,
@@ -49,6 +56,16 @@ export const projectsAPI = {
    */
   getById: async (projectId: string) => {
     return apiFetch<Project>(API_ENDPOINTS.projects.byId(projectId), {
+      method: "GET",
+    });
+  },
+
+  /**
+   * Every file the agents wrote for this project (latest version of each)
+   * GET /api/v1/projects/:id/files
+   */
+  getFiles: async (projectId: string) => {
+    return apiFetch<ProjectFile[]>(API_ENDPOINTS.projects.files(projectId), {
       method: "GET",
     });
   },
