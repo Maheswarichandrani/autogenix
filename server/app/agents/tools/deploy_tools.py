@@ -19,16 +19,20 @@ KEY FIXES vs original:
      so push_to_github can work without git being installed in every image.
      Git is installed in spin_up() already, so this is belt-and-suspenders.
 
-  5. push_to_github: credential injection via GIT_ASKPASS env var instead of
-     embedding the token in the URL (avoids token appearing in `ps aux` output
-     and git remote -v).
+  5. push_to_github: the GitHub token never enters the sandbox container.
+     The container is only read (file list + file bytes); the commit is built
+     and pushed from the worker through the GitHub Git Data API, with the token
+     only in HTTPS headers. No force push. The target repo must belong to the
+     signed-in user.
 """
 
 from __future__ import annotations
 
-import json
+import base64
 import logging
+import re
 import time
+from urllib.parse import quote
 
 import requests
 
@@ -39,11 +43,94 @@ log = logging.getLogger(__name__)
 # Railway GraphQL endpoint
 _RAILWAY_GQL = "https://backboard.railway.app/graphql/v2"
 
+_GITHUB_API = "https://api.github.com"
 
-def get_deploy_tools(docker: DockerManager, github_token: str, railway_api_key: str = ""):
+# Only the user's own github.com repos, e.g. https://github.com/alice/my-api(.git)
+_GITHUB_REPO_URL = re.compile(
+    r"^https://github\.com/([A-Za-z0-9-]{1,39})/([A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$"
+)
+
+# Never pushed, whatever the app's .gitignore says
+_SKIP_DIRS = {".git", "node_modules", "venv", ".venv", "__pycache__"}
+_SKIP_FILES = {"app.log"}
+
+_MAX_FILE_BYTES = 5 * 1024 * 1024
+_MAX_TOTAL_BYTES = 50 * 1024 * 1024
+_MAX_FILES = 1000
+
+
+def _parse_github_repo_url(url: str) -> tuple[str, str] | None:
+    """Return (owner, repo) for a github.com repo URL, or None if it is not one."""
+    m = _GITHUB_REPO_URL.match((url or "").strip())
+    if not m or m.group(2) in (".", ".."):
+        return None
+    return m.group(1), m.group(2)
+
+
+def _filter_push_paths(paths: list[str]) -> list[str]:
     """
-    Returns deployment tools bound to this build's credentials.
+    Drop unsafe or unwanted paths from a file list produced inside the
+    (untrusted) container: absolute paths, '..', dependency/cache dirs,
+    and real .env files (only .env.example is pushed).
+    """
+    kept: list[str] = []
+    for p in paths:
+        if not p or p.startswith("/") or "\\" in p:
+            continue
+        parts = p.split("/")
+        if any(part in ("", ".", "..") for part in parts):
+            continue
+        if any(part in _SKIP_DIRS for part in parts[:-1]) or parts[0] in _SKIP_DIRS:
+            continue
+        name = parts[-1]
+        if name in _SKIP_FILES:
+            continue
+        if (name == ".env" or name.startswith(".env.")) and name != ".env.example":
+            continue
+        kept.append(p)
+    return sorted(set(kept))
+
+
+class _GitHubError(Exception):
+    """A GitHub API failure with a token-free message."""
+
+
+def _gh_error(resp: requests.Response, action: str) -> _GitHubError:
+    try:
+        detail = resp.json().get("message", "")
+    except ValueError:
+        detail = ""
+    return _GitHubError(f"{action} failed: HTTP {resp.status_code} {detail}".strip())
+
+
+def make_repo_name(project_name: str, project_id: str) -> str:
+    """
+    Deterministic repo name for a project: <slug>-<first 8 hex of project id>.
+    Set by code, never by the model, so retries and redeploys hit the same repo.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", (project_name or "").lower()).strip("-")[:30].strip("-")
+    suffix = re.sub(r"[^a-f0-9]", "", str(project_id).lower())[:8]
+    return f"{slug or 'autogenix-app'}-{suffix}" if suffix else (slug or "autogenix-app")
+
+
+def _project_marker(project_id: str) -> str:
+    """Tag written into the repo description to prove Autogenix made it for this project."""
+    return f"[autogenix:{project_id}]"
+
+
+def get_deploy_tools(
+    docker:          DockerManager,
+    github_token:    str,
+    railway_api_key: str,
+    app_env_vars:    dict[str, str],
+    repo_name:       str,
+    project_id:      str,
+):
+    """
+    Returns deployment tools bound to this deploy's credentials.
     Called once per deploy; all closures capture the same credentials.
+    Secrets (tokens, app env var values) are bound here and never pass
+    through the model: tools take no secret arguments.
     """
 
     _gh_headers = {
@@ -72,43 +159,116 @@ def get_deploy_tools(docker: DockerManager, github_token: str, railway_api_key: 
 
     from langchain_core.tools import tool
 
+    marker = _project_marker(project_id)
+
     @tool
-    def create_github_repo(repo_name: str, description: str = "", private: bool = True) -> str:
+    def create_github_repo(description: str = "") -> str:
         """
-        Create a new private GitHub repository.
-        repo_name: e.g. "my-todo-api" (kebab-case, max 40 chars)
+        Create this project's private GitHub repository, or reuse it if
+        Autogenix already created it for this project. The name and
+        visibility are fixed by the platform.
+        description: one-line description of the app.
         Returns: clone_url and html_url on success, or descriptive error.
         """
+        full_description = f"{(description or '').strip()[:250]} {marker}".strip()
         try:
             resp = requests.post(
-                "https://api.github.com/user/repos",
+                f"{_GITHUB_API}/user/repos",
                 headers = _gh_headers,
                 json    = {
                     "name":        repo_name,
-                    "description": description,
-                    "private":     private,
+                    "description": full_description,
+                    "private":     True,   # always private (AGENTS.md section 7)
                     "auto_init":   False,
                 },
                 timeout = 15,
             )
             if resp.status_code == 422:
-                # Repo already exists — fetch it
-                user_resp = requests.get("https://api.github.com/user", headers=_gh_headers, timeout=10)
-                username  = user_resp.json().get("login", "unknown")
-                get_resp  = requests.get(
-                    f"https://api.github.com/repos/{username}/{repo_name}",
+                # Name taken. Reuse only a repo we created for THIS project
+                # (redeploy or Celery retry); never touch anything else.
+                login = _gh("GET", "/user", "Read signed-in user").json().get("login", "")
+                existing = requests.get(
+                    f"{_GITHUB_API}/repos/{login}/{repo_name}",
                     headers = _gh_headers,
-                    timeout = 10,
+                    timeout = 15,
                 )
-                if get_resp.status_code == 200:
-                    repo = get_resp.json()
-                    return f"✅ Repo already exists: clone_url={repo['clone_url']} html_url={repo['html_url']}"
-                return f"❌ Repo name conflict but could not fetch existing repo: {resp.text}"
-            resp.raise_for_status()
+                if existing.status_code == 200 and marker in (existing.json().get("description") or ""):
+                    repo = existing.json()
+                    return (
+                        f"✅ Reusing this project's repo: clone_url={repo['clone_url']} "
+                        f"html_url={repo['html_url']}"
+                    )
+                return (
+                    f"❌ A repo named '{repo_name}' already exists in your account and was not "
+                    f"created by Autogenix for this project. Rename or delete it, then deploy again."
+                )
+            if resp.status_code not in (200, 201):
+                raise _gh_error(resp, "Create repo")
             repo = resp.json()
             return f"✅ Repo created: clone_url={repo['clone_url']} html_url={repo['html_url']}"
-        except Exception as e:
-            return f"❌ Failed to create GitHub repo: {e}"
+        except _GitHubError as e:
+            return _mask(f"❌ Failed to create GitHub repo: {e}")
+        except requests.RequestException as e:
+            return f"❌ Failed to create GitHub repo: network error ({type(e).__name__})"
+
+    def _gh(method: str, path: str, action: str, **kwargs) -> requests.Response:
+        """Call the GitHub REST API. The token travels only in the request header."""
+        resp = requests.request(
+            method, f"{_GITHUB_API}{path}", headers=_gh_headers, timeout=30, **kwargs
+        )
+        if resp.status_code not in (200, 201):
+            raise _gh_error(resp, action)
+        return resp
+
+    _secrets = sorted(
+        {s for s in (github_token, railway_api_key, *(app_env_vars or {}).values()) if s and len(s) >= 4},
+        key=len, reverse=True,
+    )
+
+    def _mask(text: str) -> str:
+        """Defence in depth: never let a secret reach a tool result."""
+        for secret in _secrets:
+            text = text.replace(secret, "***")
+        return text
+
+    def _collect_workspace() -> tuple[dict[str, tuple[bytes, bool]], list[str]]:
+        """
+        Read the files to push from the container, without giving it any
+        credentials. Honours the app's .gitignore via `git ls-files`.
+        """
+        exit_code, output = docker.exec(
+            "git init -q >/dev/null 2>&1 && git ls-files -co --exclude-standard -z",
+            timeout=60,
+        )
+        if exit_code != 0:
+            raise _GitHubError(f"Could not list workspace files: {output[:300]}")
+
+        paths = _filter_push_paths(output.split("\0"))
+        if not paths:
+            raise _GitHubError("No files to push in /workspace.")
+        if len(paths) > _MAX_FILES:
+            raise _GitHubError(f"Too many files to push ({len(paths)} > {_MAX_FILES}).")
+
+        contents = docker.read_workspace_files(set(paths))
+        files: dict[str, tuple[bytes, bool]] = {}
+        skipped: list[str] = []
+        total = 0
+        for path in paths:
+            if path not in contents:
+                skipped.append(f"{path} (not a regular file)")
+                continue
+            data, executable = contents[path]
+            if len(data) > _MAX_FILE_BYTES:
+                skipped.append(f"{path} (over 5 MB)")
+                continue
+            total += len(data)
+            files[path] = (data, executable)
+
+        if total > _MAX_TOTAL_BYTES:
+            raise _GitHubError("Workspace is larger than 50 MB; refusing to push.")
+        if not files:
+            raise _GitHubError("No pushable files in /workspace.")
+        return files, skipped
 
     @tool
     def push_to_github(clone_url: str, commit_message: str = "AI build") -> str:
@@ -118,31 +278,97 @@ def get_deploy_tools(docker: DockerManager, github_token: str, railway_api_key: 
         commit_message: git commit message.
         Returns success or detailed error message.
         """
-        # Use credential helper env var instead of embedding token in URL
-        # (prevents token leaking in `git remote -v` or process listings)
-        token_url = clone_url.replace("https://", f"https://{github_token}@")
+        parsed = _parse_github_repo_url(clone_url)
+        if not parsed:
+            return "❌ Refused: clone_url must look like https://github.com/<owner>/<repo>.git"
+        owner, repo = parsed
+        base = f"/repos/{owner}/{repo}"
 
-        steps = [
-            ("git init",                                           "Init git"),
-            ("git config user.email 'bot@autogenix.build'",         "Set git email"),
-            ("git config user.name 'Autogenix Build Bot'",          "Set git name"),
-            (f"git remote remove origin 2>/dev/null || true",     "Clear old origin"),
-            (f"git remote add origin {token_url}",                "Add origin"),
-            ("git add -A",                                        "Stage files"),
-            (f"git commit -m '{commit_message}' --allow-empty",   "Commit"),
-            ("git branch -M main",                                "Set branch"),
-            ("git push -u origin main --force",                   "Push"),
-        ]
+        try:
+            login = _gh("GET", "/user", "Read signed-in user").json().get("login", "")
+            if owner.lower() != login.lower():
+                return f"❌ Refused: repo owner '{owner}' is not the signed-in GitHub user."
 
-        for cmd, label in steps:
-            # Never log the token_url line
-            safe_cmd = cmd.replace(github_token, "***") if github_token in cmd else cmd
-            exit_code, output = docker.exec(f"cd /workspace && {cmd}", timeout=120)
-            if exit_code != 0 and "nothing to commit" not in output and "already exists" not in output:
-                return f"❌ Failed at '{label}':\n{output[:500]}"
+            info = _gh("GET", base, "Read repo").json()
+            if not info.get("permissions", {}).get("push"):
+                return f"❌ Refused: no push permission on {owner}/{repo}."
+            branch = info.get("default_branch") or "main"
 
-        safe_url = clone_url.split("@")[-1] if "@" in clone_url else clone_url
-        return f"✅ Pushed to {safe_url}"
+            files, skipped = _collect_workspace()
+
+            def head_sha() -> str | None:
+                resp = requests.get(
+                    f"{_GITHUB_API}{base}/git/ref/heads/{branch}",
+                    headers=_gh_headers, timeout=30,
+                )
+                if resp.status_code == 200:
+                    return resp.json()["object"]["sha"]
+                if resp.status_code in (404, 409):  # 409 = empty repository
+                    return None
+                raise _gh_error(resp, "Read branch")
+
+            parent = head_sha()
+            if parent is None:
+                # The Git Data API refuses empty repos; the Contents API makes
+                # the first commit. The tree built below replaces it fully.
+                first_path = next(iter(files))
+                _gh(
+                    "PUT", f"{base}/contents/{quote(first_path)}", "Create first commit",
+                    json={
+                        "message": "Initial commit",
+                        "content": base64.b64encode(files[first_path][0]).decode(),
+                        "branch":  branch,
+                    },
+                )
+                parent = head_sha()
+                if parent is None:
+                    raise _GitHubError("Branch still missing after the first commit.")
+
+            tree = []
+            for path, (data, executable) in files.items():
+                blob = _gh(
+                    "POST", f"{base}/git/blobs", f"Upload {path}",
+                    json={"content": base64.b64encode(data).decode(), "encoding": "base64"},
+                ).json()
+                tree.append({
+                    "path": path,
+                    "mode": "100755" if executable else "100644",
+                    "type": "blob",
+                    "sha":  blob["sha"],
+                })
+
+            # No base_tree: the commit contains exactly the workspace files
+            tree_sha = _gh("POST", f"{base}/git/trees", "Create tree", json={"tree": tree}).json()["sha"]
+            commit_sha = _gh(
+                "POST", f"{base}/git/commits", "Create commit",
+                json={
+                    "message": commit_message or "AI build",
+                    "tree":    tree_sha,
+                    "parents": [parent],
+                    "author":  {"name": "Autogenix Build Bot", "email": "bot@autogenix.build"},
+                },
+            ).json()["sha"]
+            # Fast-forward only — never overwrite history
+            _gh(
+                "PATCH", f"{base}/git/refs/heads/{branch}", "Update branch",
+                json={"sha": commit_sha, "force": False},
+            )
+
+        except _GitHubError as e:
+            return _mask(f"❌ Push failed: {e}")
+        except requests.RequestException as e:
+            return f"❌ Push failed: network error talking to GitHub ({type(e).__name__})"
+        except Exception as e:
+            log.exception("push_to_github failed for %s/%s", owner, repo)
+            return _mask(f"❌ Push failed: {type(e).__name__}: {e}")
+
+        result = (
+            f"✅ Pushed {len(files)} files to https://github.com/{owner}/{repo} "
+            f"(branch {branch}, commit {commit_sha[:7]})"
+        )
+        if skipped:
+            result += "\nSkipped: " + ", ".join(skipped)
+        return _mask(result)
 
     # ── Railway tools ─────────────────────────────────────────────
 
@@ -150,14 +376,13 @@ def get_deploy_tools(docker: DockerManager, github_token: str, railway_api_key: 
     def deploy_to_railway(
         github_repo_url: str,
         project_name:    str,
-        env_vars:        str = "{}",
     ) -> str:
         """
         Deploy a GitHub repo to Railway as a web service.
+        The user's environment variables are applied automatically.
 
         github_repo_url: GitHub HTML URL e.g. "https://github.com/user/my-api"
         project_name: name for the Railway project (kebab-case)
-        env_vars: JSON string of environment variables e.g. '{"DATABASE_URL":"..."}'
 
         Returns project_id, service_id, and the deployment URL.
         """
@@ -165,7 +390,7 @@ def get_deploy_tools(docker: DockerManager, github_token: str, railway_api_key: 
             return "❌ Railway API key not configured."
 
         try:
-            vars_dict: dict = json.loads(env_vars) if env_vars and env_vars != "{}" else {}
+            vars_dict: dict = dict(app_env_vars or {})
 
             # Extract owner/repo from GitHub URL
             # e.g. https://github.com/alice/my-api → alice/my-api
@@ -255,11 +480,12 @@ def get_deploy_tools(docker: DockerManager, github_token: str, railway_api_key: 
                 f"project_id={project_id}\n"
                 f"service_id={service_id}\n"
                 f"url={deploy_url}\n"
+                f"env_vars_set={', '.join(sorted(vars_dict)) or 'none'}\n"
                 f"status=deploying"
             )
 
         except Exception as e:
-            return f"❌ Railway deployment failed: {e}"
+            return _mask(f"❌ Railway deployment failed: {e}")
 
     @tool
     def check_deploy_status(service_id: str) -> str:

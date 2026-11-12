@@ -12,6 +12,7 @@ import { useWorkflow } from "@/hooks/use-workflow";
 import { useCodeStream } from "@/hooks/use-code-stream";
 import RightSidebar from "./right-sidebar";
 import { useRightSidebar } from "@/store/right-sidebar-store";
+import { WorkspaceActionsProvider } from "./workspace-actions-context";
 
 interface WorkspaceClientProps {
   initialProject: Project;
@@ -38,7 +39,12 @@ const WorkspaceClient = ({ initialProject }: WorkspaceClientProps) => {
     pausedIteration,
     pausedMaxIterations,
     sendAction,
+    sendActionAsync,
   } = useWorkflow(initialProject.id);
+
+  // Only the deploy card consumes this, so a fresh object per render is cheap
+  // and always carries the latest sendActionAsync.
+  const workspaceActions = { projectId: initialProject.id, sendActionAsync };
 
   // Second SSE stream — code panel receives file events on a separate channel
   const { fileCount, isConnected: isCodeConnected } = useCodeStream(initialProject.id);
@@ -68,9 +74,12 @@ const WorkspaceClient = ({ initialProject }: WorkspaceClientProps) => {
   };
 
   return (
-    <>
+    <WorkspaceActionsProvider value={workspaceActions}>
       <WorkspaceHeader
+        projectId={initialProject.id}
         projectName={initialProject.name}
+        repoUrl={initialProject.repo_url}
+        onOpenSettings={showSettings}
         isBuilding={["building", "thinking", "testing", "fixing"].includes(stage)}
         activeTab={currentState}
         onTabChange={handleTabChange}
@@ -111,7 +120,7 @@ const WorkspaceClient = ({ initialProject }: WorkspaceClientProps) => {
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
-    </>
+    </WorkspaceActionsProvider>
   );
 };
 

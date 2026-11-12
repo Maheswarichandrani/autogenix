@@ -18,7 +18,7 @@ KEY FIXES vs original:
   3. deploy_confirm_task — fixed interrupt strategy.
      We now use interrupt_before=["deployer"] (set in workflow.py).
      This means the deployer node hasn't run yet when we get here.
-     So we: update_state({"deploy_payload": payload}) then stream(None).
+     So we: put credentials in agents/deploy_context (memory only), then stream(None).
      The deployer runs ONCE with full credentials. No re-entry bug.
 
   4. Module-level DB engine — one connection pool shared across all tasks
@@ -146,13 +146,16 @@ def _create_build(db: Session, project_id: str, description: str = "") -> str:
     """Create a Build row and return its string ID."""
     from app.models import Build
 
-    # Use SELECT FOR UPDATE to prevent duplicate build_numbers under concurrency
-    result  = db.execute(
+    from app.models import Project
+
+    # Lock the project row so two builds can't take the same build_number.
+    # (Postgres rejects FOR UPDATE on an aggregate like max(), which is why
+    # this used to fail and no Build row was ever created.)
+    db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
+    next_num = db.execute(
         select(func.coalesce(func.max(Build.build_number), 0))
         .where(Build.project_id == project_id)
-        .with_for_update()
-    )
-    next_num = result.scalar_one() + 1
+    ).scalar_one() + 1
 
     build = Build(
         project_id    = project_id,
@@ -173,7 +176,7 @@ def _save_state_to_db(db: Session, state: dict, project_id: str, build_id: str |
 
     - Replaces temp artifact IDs with real DB UUIDs inside message blocks.
     - Persists run_config to Build.metadata for cross-node reattach.
-    - NEVER persists deploy_payload (contains plaintext credentials).
+    - Credentials never reach graph state; see agents/deploy_context.py.
     - After commit the caller MUST call wf.update_state(config, {"messages_to_save": None})
       to reset the reducer in the LangGraph checkpoint so messages aren't re-saved
       on the next invocation.
@@ -266,6 +269,73 @@ def _finalise_build(db: Session, state: dict) -> None:
     db.commit()
 
 
+def _finalise_if_escalated(wf, config: dict, db: Session, state: dict) -> None:
+    """
+    escalate_node parks the graph at conductor instead of END, so the normal
+    "reached END → finalise" path never runs for it. Mark the Build failed
+    here, then clear the per-build fields so the next build starts clean.
+    """
+    if not state.get("escalation_reason"):
+        return
+    _finalise_build(db, state)
+    wf.update_state(config, {"build_id": None, "escalation_reason": None})
+    state["build_id"] = None
+    state["escalation_reason"] = None
+
+
+def _persist_deploy_card(
+    db: Session, project_id: str, build_id: str | None,
+    artifact_type: str, title: str, content: dict,
+) -> None:
+    """
+    Store the deploy card so it survives a page reload.
+
+    Written directly (not via messages_to_save) so it can be idempotent per
+    build: a re-park at the deployer must not add a second card. Skipped if an unsubmitted card of this
+    type for this build already exists. Content holds key names only.
+    """
+    from sqlalchemy import select
+    from app.models import Message, Artifact, Build
+
+    existing = db.execute(
+        select(Artifact).where(
+            Artifact.project_id == project_id,
+            Artifact.artifact_type == artifact_type,
+            Artifact.content["build_id"].astext == (build_id or ""),
+        )
+    ).scalars().all()
+    if any((a.content or {}).get("status") != "submitted" for a in existing):
+        return
+
+    # FK guard: the Build row can be missing (known defect); keep the id in content.
+    import uuid as _uuid
+    try:
+        build_uuid = _uuid.UUID(build_id) if build_id else None
+    except ValueError:
+        build_uuid = None
+    build_fk = build_uuid if build_uuid and db.get(Build, build_uuid) else None
+
+    card = Artifact(
+        project_id    = project_id,
+        build_id      = build_fk,
+        artifact_type = artifact_type,
+        title         = title,
+        content       = content,
+    )
+    db.add(card)
+    db.flush()
+    db.add(Message(
+        project_id   = project_id,
+        role         = "deployer",
+        message_type = "assistant_response",
+        content      = [{"type": "artifact", "artifact_id": str(card.id)}],
+        # Same clock as the agent messages (_msg uses the worker's time); the DB
+        # default uses the DB server's clock, which can sort the card above them.
+        created_at   = datetime.now(timezone.utc),
+    ))
+    db.commit()
+
+
 def _stream_until_interrupt_or_end(wf, config: dict, db: Session, project_id: str) -> dict:
     """
     Drive the graph forward until it either:
@@ -290,6 +360,14 @@ def _stream_until_interrupt_or_end(wf, config: dict, db: Session, project_id: st
             log.info("Build created project=%s build=%s", project_id, build_id)
 
         next_nodes = list(snap.next or [])
+
+        if "deployer" in next_nodes:
+            from app.agents.workflow import ENV_VAR_REQUEST_TITLE, env_var_request_content
+            build_id = state.get("build_id") or ""
+            _persist_deploy_card(
+                db, project_id, build_id, "env_var_request", ENV_VAR_REQUEST_TITLE,
+                env_var_request_content(build_id, state.get("build_description", "")),
+            )
 
         # Stopped at interrupt or reached END
         if not next_nodes or "conductor" in next_nodes or "deployer" in next_nodes:
@@ -379,12 +457,15 @@ def start_workflow_task(
             "run_config":           None,
             "app_url":              None,
             "security_iteration":   0,
+            "security_status":      None,
+            "startup_attempts":     0,
+            "verify_error":         None,
+            "fix_reason":           None,
+            "escalation_reason":    None,
             "security_issues":      [],
             "all_security_issues":  [],
-            "deploy_payload":       None,
             "artifacts":            [],
-            "messages_to_save":     [],
-            "_saved_msg_count":     0,
+            "messages_to_save":     None,
             "repo_url":             None,
             "deploy_url":           None,
             "error":                None,
@@ -398,7 +479,8 @@ def start_workflow_task(
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
-        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        wf.update_state(config, {"messages_to_save": None})
+        _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -430,12 +512,15 @@ def start_workflow_task(
                 "run_config":           None,
                 "app_url":              None,
                 "security_iteration":   0,
+                "security_status":      None,
+                "startup_attempts":     0,
+                "verify_error":         None,
+                "fix_reason":           None,
+                "escalation_reason":    None,
                 "security_issues":      [],
                 "all_security_issues":  [],
-                "deploy_payload":       None,
                 "artifacts":            [],
-                "messages_to_save":     [],
-                "_saved_msg_count":     0,
+                "messages_to_save":     None,
                 "repo_url":             None,
                 "deploy_url":           None,
                 "error":                str(e),
@@ -525,12 +610,15 @@ def resume_workflow_task(
                 "run_config":           None,
                 "app_url":              None,
                 "security_iteration":   0,
+                "security_status":      None,
+                "startup_attempts":     0,
+                "verify_error":         None,
+                "fix_reason":           None,
+                "escalation_reason":    None,
                 "security_issues":      [],
                 "all_security_issues":  [],
-                "deploy_payload":       None,
                 "artifacts":            [],
-                "messages_to_save":     [],
-                "_saved_msg_count":     0,
+                "messages_to_save":     None,
                 "repo_url":             None,
                 "deploy_url":           None,
                 "error":                None,
@@ -539,7 +627,8 @@ def resume_workflow_task(
             # Now run conductor with the user's new message
             state = _stream_until_interrupt_or_end(wf, config, db, project_id)
             _save_state_to_db(db, state, project_id, state.get("build_id"))
-            wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+            wf.update_state(config, {"messages_to_save": None})
+            _finalise_if_escalated(wf, config, db, state)
 
             snap = wf.get_state(config)
             if not snap.next:
@@ -561,7 +650,8 @@ def resume_workflow_task(
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
-        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        wf.update_state(config, {"messages_to_save": None})
+        _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -589,12 +679,15 @@ def resume_workflow_task(
                 "run_config":           None,
                 "app_url":              None,
                 "security_iteration":   0,
+                "security_status":      None,
+                "startup_attempts":     0,
+                "verify_error":         None,
+                "fix_reason":           None,
+                "escalation_reason":    None,
                 "security_issues":      [],
                 "all_security_issues":  [],
-                "deploy_payload":       None,
                 "artifacts":            [],
-                "messages_to_save":     [],
-                "_saved_msg_count":     0,
+                "messages_to_save":     None,
                 "repo_url":             None,
                 "deploy_url":           None,
                 "error":                str(e),
@@ -644,7 +737,8 @@ def railway_connect_task(self, project_id: str, thread_id: str) -> None:
 
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
         _save_state_to_db(db, state, project_id, state.get("build_id"))
-        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        wf.update_state(config, {"messages_to_save": None})
+        _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -663,16 +757,17 @@ def railway_connect_task(self, project_id: str, thread_id: str) -> None:
 # ═══════════════════════════════════════════════════════════════════
 # TASK 4 — DEPLOY CONFIRM
 # User submitted their app env vars.
-# Worker assembles FULL deploy_payload server-side (never from user),
-# updates graph state, then resumes the deployer node.
+# Worker loads credentials server-side (never from user) into deploy_context,
+# then resumes the deployer node.
 #
 # INTERRUPT STRATEGY:
 #   workflow.py uses interrupt_before=["deployer"].
 #   This means deployer has NOT run yet when we get here.
 #   The deployer emitted env_var_request SSE *outside* the graph
 #   (from the artificer→guardian→deployer transition logic below).
-#   Now we inject credentials into state and stream — deployer runs once
-#   with full credentials. No re-entry, no double-publish.
+#   Credentials go into agents/deploy_context (process memory) — NEVER into
+#   graph state, because every update_state writes a Postgres checkpoint.
+#   App env vars arrive Fernet-encrypted so Redis never holds plaintext.
 # ═══════════════════════════════════════════════════════════════════
 
 @celery_app.task(bind=True, name="workers.deploy_confirm", max_retries=1)
@@ -681,15 +776,14 @@ def deploy_confirm_task(
     project_id:     str,
     thread_id:      str,
     user_id:        str,
-    plaintext_vars: dict,
+    encrypted_vars: str,
 ) -> None:
+    import json
+    from app.agents import deploy_context
     from app.core.redis import publish
     from app.utils.encryption import decrypt_token
 
     db = _get_session()
-    github_token    = None
-    railway_api_key = None
-    deploy_payload  = None
 
     try:
         wf     = _workflow()
@@ -731,39 +825,37 @@ def deploy_confirm_task(
 
         if not user.railway_api_key_encrypted:
             # Emit connect_railway card — do NOT resume graph yet
-            build_id = (snap.values or {}).get("build_id", "")
-            _publish_connect_railway(project_id, build_id)
+            # The submitted env vars are dropped here; the card asks for them again.
+            values = snap.values or {}
+            _publish_connect_railway(
+                db, project_id, values.get("build_id") or "", values.get("build_description", ""),
+            )
             return
 
-        # ── Decrypt (in memory only from this point) ──────────────
-        github_token    = decrypt_token(user.github_token_encrypted)
-        railway_api_key = decrypt_token(user.railway_api_key_encrypted)
+        # ── Decrypt into process memory only (never graph state) ──
+        app_env_vars = json.loads(decrypt_token(encrypted_vars) or "{}")
+        if not isinstance(app_env_vars, dict):
+            raise ValueError("Deploy env vars payload is not an object")
 
         log.info(
             "deploy_confirm project=%s user=%s vars_count=%d",
-            project_id, user_id, len(plaintext_vars),
+            project_id, user_id, len(app_env_vars),
         )
-        # NEVER log plaintext_vars
+        # NEVER log app_env_vars values
 
-        # ── Assemble deploy_payload and inject into graph state ────
-        deploy_payload = {
-            "plaintext_vars":  plaintext_vars,
-            "github_token":    github_token,
-            "railway_api_key": railway_api_key,
-        }
+        deploy_context.put(thread_id, deploy_context.DeployContext(
+            github_token    = decrypt_token(user.github_token_encrypted),
+            railway_api_key = decrypt_token(user.railway_api_key_encrypted),
+            app_env_vars    = {str(k): str(v) for k, v in app_env_vars.items()},
+        ))
+        del app_env_vars
 
-        # update_state before streaming — deployer reads from state, not Command
-        wf.update_state(config, {"deploy_payload": deploy_payload})
-
-        # ── Resume — deployer runs once with full credentials ──────
+        # ── Resume — deployer_node take()s the context ────────────
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
 
-        # Wipe credentials from graph state immediately
-        wf.update_state(config, {"deploy_payload": None})
-        state["deploy_payload"] = None
-
         _save_state_to_db(db, state, project_id, state.get("build_id"))
-        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        wf.update_state(config, {"messages_to_save": None})
+        _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
         if not snap.next:
@@ -776,38 +868,38 @@ def deploy_confirm_task(
         _close_streams(project_id)
         raise self.retry(exc=e, countdown=30)
     finally:
-        # Always wipe secrets from local scope
-        plaintext_vars.clear()
-        if github_token:    github_token    = None  # noqa: F841
-        if railway_api_key: railway_api_key = None  # noqa: F841
-        if deploy_payload:  deploy_payload  = None  # noqa: F841
+        # Secrets must not outlive this task (no-op if deployer took them)
+        deploy_context.discard(thread_id)
         db.close()
 
 
 # ── Connect Railway helper ────────────────────────────────────────
 
-def _publish_connect_railway(project_id: str, build_id: str) -> None:
+def _publish_connect_railway(db: Session, project_id: str, build_id: str, build_description: str) -> None:
     """
-    Emit connect_railway SSE event directly (graph stays paused at deployer interrupt).
-    Called when user hasn't set their Railway API key yet.
+    Emit and persist the connect_railway card (graph stays paused at the deployer
+    interrupt). It renders the same deploy form, with the Railway step shown, so
+    the user re-enters env vars and deploys in one go. Rare: the card normally
+    saves the Railway key before submitting.
     """
     import json
     from app.core.redis import publish
+    from app.agents.workflow import env_var_request_content
 
+    title   = "Connect Railway to deploy"
+    content = {
+        **env_var_request_content(build_id, build_description),
+        "message": (
+            "Railway is not connected yet. Add your Railway API token, then "
+            "re-enter the environment variables your app needs."
+        ),
+    }
+    _persist_deploy_card(db, project_id, build_id, "connect_railway", title, content)
     publish(project_id, {
         "type":          "artifact",
         "artifact_type": "connect_railway",
-        "title":         "Connect Railway to Deploy",
-        "content": json.dumps({
-            "build_id": build_id,
-            "status":   "waiting_for_railway_key",
-            "message":  (
-                "🚂 Almost there! Your app is built and security-tested.\n\n"
-                "To deploy, connect your Railway account once — "
-                "future deployments are fully automatic.\n\n"
-                "Get your token: railway.app → Account Settings → Tokens"
-            ),
-        }),
+        "title":         title,
+        "content":       json.dumps(content),
     })
     publish(project_id, {"type": "done"})
     _close_streams(project_id)  # This workflow path ends here

@@ -50,6 +50,28 @@ log = logging.getLogger(__name__)
 _client: docker.DockerClient | None = None
 
 
+class _ChunkReader(io.RawIOBase):
+    """File-like wrapper over the byte-chunk generator from get_archive()."""
+
+    def __init__(self, chunks) -> None:
+        self._chunks = iter(chunks)
+        self._buf = b""
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b) -> int:
+        while not self._buf:
+            try:
+                self._buf = next(self._chunks)
+            except StopIteration:
+                return 0
+        n = min(len(b), len(self._buf))
+        b[:n] = self._buf[:n]
+        self._buf = self._buf[n:]
+        return n
+
+
 def _docker() -> docker.DockerClient:
     """Lazy singleton Docker client."""
     global _client
@@ -257,10 +279,24 @@ class DockerManager:
             if result.exit_code != 0:
                 log.warning("Failed to create /workspace: %s", result.output)
             
-            # Now we can use the regular exec method for other bootstrap commands
-            self.exec("apt-get update -qq && apt-get install -y -qq git curl 2>/dev/null", timeout=300)
         except Exception as e:
-            log.warning("Failed to bootstrap container %s: %s", self.container_name, e)
+            log.warning("Failed to create /workspace in %s: %s", self.container_name, e)
+
+        # Sandbox tools. curl runs the health check, procps provides pkill for
+        # restarts, git lists files for the deploy push. Without them every
+        # build would fail later with a misleading error, so fail loudly here.
+        # --no-install-recommends keeps this to seconds instead of minutes.
+        exit_code, output = self.exec(
+            "apt-get update -qq && "
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "
+            "git curl procps ca-certificates",
+            timeout=600,
+        )
+        if exit_code != 0:
+            raise RuntimeError(
+                f"Sandbox setup failed (could not install curl/procps/git, exit {exit_code}):\n"
+                f"{output[-1500:]}"
+            )
 
         log.info("Container %s started, host_port=%s", self.container_name, self.app_port)
         return self.container.id
@@ -445,6 +481,36 @@ class DockerManager:
             path = path[len("tmp/"):]
         _, output = self.exec(f"cat /workspace/{path}")
         return output
+
+    def read_workspace_files(self, paths: set[str]) -> dict[str, tuple[bytes, bool]]:
+        """
+        Read the raw bytes of selected files under /workspace.
+
+        Returns {relative_path: (content, is_executable)} for every requested
+        path that is a regular file. Symlinks, devices, directories and paths
+        not in `paths` are ignored. The archive is parsed in memory as a stream
+        and nothing is extracted to disk, so untrusted container content cannot
+        write to the worker's filesystem.
+        """
+        if not self.container:
+            raise RuntimeError("Container not started — call spin_up() first.")
+
+        stream, _ = self.container.get_archive("/workspace")
+        tar = tarfile.open(fileobj=_ChunkReader(stream), mode="r|")
+        files: dict[str, tuple[bytes, bool]] = {}
+        try:
+            for member in tar:
+                # Members are named "workspace/<path>"
+                _, _, rel = member.name.partition("/")
+                if not member.isreg() or rel not in paths:
+                    continue
+                fh = tar.extractfile(member)
+                if fh is None:
+                    continue
+                files[rel] = (fh.read(), bool(member.mode & 0o111))
+        finally:
+            tar.close()
+        return files
 
     def list_files(self) -> list[str]:
         _, out = self.exec("find /workspace -type f | sed 's|/workspace/||'")

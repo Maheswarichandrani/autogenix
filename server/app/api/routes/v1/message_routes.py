@@ -38,11 +38,14 @@ Docs:    https://github.com/sysid/sse-starlette
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import uuid
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # THE FIX: import EventSourceResponse instead of using StreamingResponse
@@ -51,6 +54,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.redis import subscribe_and_stream, subscribe_code_stream
+from app.models.artifact import Artifact
 from app.models.user import User
 from app.repositories.artifact_repo import ArtifactRepo
 from app.repositories.build_repo import BuildRepo
@@ -59,6 +63,7 @@ from app.repositories.project_repo import ProjectRepo
 from app.schemas.enums import ACTION_TO_MESSAGE_TYPE, UserAction
 from app.schemas.message_schemas import SendMessageRequest
 from app.schemas.project_schemas import SendMessageResponse
+from app.utils.encryption import encrypt_token
 from app.tasks.build_worker import deploy_confirm_task, resume_workflow_task, start_workflow_task
 from app.agents.execution_registry import (
     ControlSignal,
@@ -69,6 +74,51 @@ from app.agents.execution_registry import (
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["messages"])
 log    = logging.getLogger(__name__)
+
+
+# ── Deploy env vars ───────────────────────────────────────────────
+
+_ENV_KEY_RE        = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_MAX_ENV_VARS      = 50
+_MAX_ENV_KEY_LEN   = 128
+_MAX_ENV_VALUE_LEN = 8192
+_DEPLOY_CARD_TYPES = ("env_var_request", "connect_railway")
+
+
+def _validate_env_vars(env_vars) -> None:
+    """Reject anything that is not a small {NAME: str} map. Never echoes values."""
+    if env_vars is None:
+        raise HTTPException(status_code=422, detail="vars is required for provide_env_vars action")
+    if not isinstance(env_vars, dict):
+        raise HTTPException(status_code=422, detail="vars must be an object")
+    if len(env_vars) > _MAX_ENV_VARS:
+        raise HTTPException(status_code=422, detail=f"At most {_MAX_ENV_VARS} variables are allowed")
+    for key, value in env_vars.items():
+        if not isinstance(key, str) or len(key) > _MAX_ENV_KEY_LEN or not _ENV_KEY_RE.match(key):
+            raise HTTPException(
+                status_code=422,
+                detail="Variable names must start with a letter or _ and use only letters, digits and _",
+            )
+        if not isinstance(value, str) or len(value) > _MAX_ENV_VALUE_LEN:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Value for {key} must be text of at most {_MAX_ENV_VALUE_LEN} characters",
+            )
+
+
+async def _mark_deploy_card_submitted(db: AsyncSession, project_id: UUID, keys: list[str]) -> None:
+    """Flag the latest deploy card so it renders read-only after a reload."""
+    result = await db.execute(
+        select(Artifact)
+        .where(Artifact.project_id == project_id, Artifact.artifact_type.in_(_DEPLOY_CARD_TYPES))
+        .order_by(Artifact.created_at.desc())
+        .limit(1)
+    )
+    card = result.scalar_one_or_none()
+    if card is None:
+        return
+    # Reassign a new dict so SQLAlchemy sees the JSONB change.
+    card.content = {**(card.content or {}), "status": "submitted", "submitted_keys": keys}
 
 
 # ── Serialiser ────────────────────────────────────────────────────
@@ -155,11 +205,8 @@ async def send_message(
 
     # ── provide_env_vars ─────────────────────────────────────────────────────
     if body.action == UserAction.PROVIDE_ENV_VARS:
-        if not body.vars:
-            raise HTTPException(
-                status_code=422,
-                detail="vars is required for provide_env_vars action",
-            )
+        # {} is valid: an app that needs no env vars still deploys.
+        _validate_env_vars(body.vars)
         active_build = await BuildRepo(db).get_active_build(project_id)
         if not active_build:
             raise HTTPException(status_code=409, detail="No active build waiting for deployment.")
@@ -172,13 +219,16 @@ async def send_message(
             message_type = "user_prompt",
             content      = [{"type": "text", "content": "Submitted environment variables for deployment."}],
         )
+        # Key names only — values never touch the artifacts table.
+        await _mark_deploy_card_submitted(db, project_id, sorted(body.vars.keys()))
         await db.commit()
 
         deploy_confirm_task.delay(
             project_id     = str(project_id),
             thread_id      = project.langgraph_thread_id,
             user_id        = str(current_user.id),
-            plaintext_vars = body.vars,
+            # Encrypted so the Redis broker never holds plaintext env vars
+            encrypted_vars = encrypt_token(json.dumps(body.vars)),
         )
 
         return {
