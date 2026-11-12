@@ -3,9 +3,14 @@ from sqlalchemy import select, desc, update, func
 import uuid
 from typing import List, Optional
 from app.models.project import Project
-from app.core.llm import get_llm
-import json
-import re
+
+# A project still called this (or an older auto name) gets renamed by the Conductor
+PLACEHOLDER_PROJECT_NAME = "New project"
+
+
+def is_placeholder_name(name: str | None) -> bool:
+    n = (name or "").strip()
+    return not n or n in (PLACEHOLDER_PROJECT_NAME, "Untitled Project") or n.startswith("Project for:")
 
 
 class ProjectRepo:
@@ -28,38 +33,14 @@ class ProjectRepo:
         Create a new project.
         """
         
-        if not name and not description and user_prompt:
-            try:
-                llm = get_llm("llama-3.1-8b")
-
-                response = llm.chat(
-                    messages=[
-                        {"role": "user", "content": f"Create a project name and description based on this user prompt: '{user_prompt}'. Return only a JSON object with 'name' and 'description' fields. Example: {{\"name\": \"Project Name\", \"description\": \"Project description\"}}"}
-                    ]
-                )
-                
-                print("LLM response for project name/description generation:", response.content)
-
-                # Extract JSON from the response (handles markdown code blocks)
-                json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
-                if not json_match:
-                    raise ValueError("No JSON object found in response")
-                
-                data = json.loads(json_match.group())
-                name = data.get("name", f"Project for: {user_prompt[:50]}...")
-                description = data.get("description", user_prompt)
-            except (json.JSONDecodeError, ValueError, Exception) as e:
-                # Fallback if LLM fails or returns invalid JSON
-                print("Error generating project name/description from LLM:", e)
-                print("Raw content:", response.content if 'response' in locals() else 'No response')
-                
-                name = f"Project for: {user_prompt[:50]}..."
-                description = user_prompt
-        
-        # Ensure we always have a name
+        # No model call here: FastAPI never runs agents (AGENTS.md §5). The
+        # Conductor gives the project a short title in the worker on its first
+        # turn, replacing this placeholder.
         if not name:
-            name = "Untitled Project"
-            
+            name = PLACEHOLDER_PROJECT_NAME
+        if not description and user_prompt:
+            description = user_prompt
+
         # Ensure we always have a description
         if not description:
             description = user_prompt or "No description provided"
@@ -129,9 +110,49 @@ class ProjectRepo:
         )
         
         result = await self.db.execute(query)
-        projects = result.scalars().all()
-        
-        return list(projects), total_count
+        projects = list(result.scalars().all())
+
+        activity = await self._activity_for([p.id for p in projects])
+        for p in projects:
+            # Transient attribute read by ProjectResponse (from_attributes)
+            p.activity = "deployed" if p.latest_deploy_url else activity.get(p.id)
+
+        return projects, total_count
+
+    async def _activity_for(self, project_ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """
+        What each project is doing now, for the sidebar dot:
+          awaiting_deploy — a deploy card is waiting for the user
+          building        — the latest build is running (started < 2 h ago;
+                            older "building" rows are crashed workers, not work)
+        Deployed is decided by the caller from latest_deploy_url.
+        """
+        if not project_ids:
+            return {}
+        from datetime import datetime, timedelta, timezone
+        from app.models.artifact import Artifact
+        from app.models.build import Build
+
+        pending = await self.db.execute(
+            select(Artifact.project_id).distinct().where(
+                Artifact.project_id.in_(project_ids),
+                Artifact.artifact_type.in_(("env_var_request", "connect_railway")),
+                Artifact.content["status"].astext == "pending",
+            )
+        )
+        out: dict[uuid.UUID, str] = {pid: "awaiting_deploy" for pid in pending.scalars().all()}
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        latest = await self.db.execute(
+            select(Build.project_id, Build.status, Build.started_at)
+            .where(Build.project_id.in_(project_ids))
+            .order_by(Build.project_id, desc(Build.created_at))
+            .distinct(Build.project_id)
+        )
+        for pid, status, started_at in latest.all():
+            if pid not in out and status == "building" and started_at and started_at > cutoff:
+                out[pid] = "building"
+        return out
 
     async def update(
         self,

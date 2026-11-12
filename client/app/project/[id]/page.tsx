@@ -53,12 +53,8 @@ const ProjectPage = async ({
     const project = response.data;
 
     return (
-        <div className="h-screen w-screen bg-background flex flex-col overflow-hidden">
-            <WorkspaceClient
-                initialProject={project}
-                
-            />
-        </div>
+        // Keyed so switching projects starts from a clean workspace
+        <WorkspaceClient key={project.id} initialProject={project} />
     );
   } catch (error) {
     console.error("Error fetching project:", error);

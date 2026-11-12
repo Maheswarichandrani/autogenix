@@ -44,6 +44,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import { useWorkflowStore } from "@/store/workflow-store";
 import { messagesAPI } from "@/lib/api/messages";
 import type { UserAction, Message, SSEEvent, WorkflowStage } from "@/types/workflow";
@@ -55,6 +56,10 @@ export const workflowKeys = {
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // Events that MUST render immediately — opt out of React 18 automatic batching
+const LIST_REFRESH_EVENTS = new Set([
+  "project_renamed", "stage_change", "done", "build_failed", "close_stream",
+]);
+
 const FLUSH_EVENT_TYPES = new Set([
   "text_chunk",
   "step",
@@ -67,6 +72,7 @@ const FLUSH_EVENT_TYPES = new Set([
 
 export function useWorkflow(projectId: string) {
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   // ── Store actions ──────────────────────────────────────────────────────────
   const hydrateMessages = useWorkflowStore((s) => s.hydrateMessages);
@@ -184,6 +190,15 @@ export function useWorkflow(projectId: string) {
       // Always read handler fresh from store — no stale closure, no reconnects.
       const handle = useWorkflowStore.getState().handleSSEEvent;
 
+      // The sidebar's project list shows names and status dots: refresh it when they change
+      if (LIST_REFRESH_EVENTS.has(sseEvent.type)) {
+        queryClient.invalidateQueries({ queryKey: ["projects"] });
+      }
+      // New title: re-read the page's project so the header shows it too
+      if (sseEvent.type === "project_renamed") {
+        router.refresh();
+      }
+
       if (FLUSH_EVENT_TYPES.has(sseEvent.type)) {
         // ── STREAMING FIX ───────────────────────────────────────────────
         // flushSync forces React to commit this state update synchronously,
@@ -220,7 +235,7 @@ export function useWorkflow(projectId: string) {
     };
 
     eventSourceRef.current = es;
-  }, [projectId]); // projectId ONLY — this is intentional
+  }, [projectId, queryClient, router]); // projectId drives reconnects; the other two are stable
 
   useEffect(() => {
     connectSSE();

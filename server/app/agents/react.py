@@ -243,10 +243,11 @@ def _run_one_iteration(
                     })
                 break
 
+            step_status = _step_msg(role, tool_name, tool_input, iteration + 1)
             publish(project_id, {
                 "type":   "step",
                 "role":   role,
-                "status": _step_msg(role, tool_name, tool_input, iteration + 1),
+                "status": step_status,
                 "tool":   tool_name,
             })
             publish(project_id, {
@@ -277,9 +278,13 @@ def _run_one_iteration(
             })
 
             tool_calls_log.append({
-                "tool":   tool_name,
-                "input":  tool_input,
-                "output": result_str,
+                "tool":     tool_name,
+                "input":    tool_input,
+                "output":   result_str,
+                # Display copies: exactly what the browser already got live.
+                "status":   step_status,
+                "preview":  _safe_preview(tool_input),
+                "is_error": result_str.startswith("❌"),
             })
 
             if provider == LLMProvider.ANTHROPIC:

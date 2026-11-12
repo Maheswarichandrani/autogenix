@@ -47,7 +47,11 @@ export type SSEEvent =
   | { type: "agent_paused";    role: string; iteration: number; max_iterations: number; reason: string }
   | { type: "agent_resumed";   role: string; model: string; budget: number }
   | { type: "agent_cancelled"; role: string; reason: string }
-  | { type: "model_switched";  role: string; old_model: string; new_model: string };
+  | { type: "model_switched";  role: string; old_model: string; new_model: string }
+  // The generated app is up in the sandbox (session only; used by the preview)
+  | { type: "app_ready";       url: string }
+  // The Conductor gave a placeholder-named project its short title
+  | { type: "project_renamed"; name: string };
 
 // ─── Step feed item (built from step/tool_call/tool_result events) ────────────
 
@@ -61,6 +65,17 @@ export interface StepFeedItem {
   is_error?: boolean;
   // "pending" → tool_call received, "done" → tool_result received
   state:     "pending" | "done";
+  // Client clock when the step started (drives the live elapsed timer)
+  startedAt?: number;
+}
+
+// A finished tool step saved with an agent message (metadata.steps)
+export interface SavedStep {
+  tool:     string;
+  status:   string;
+  is_error: boolean;
+  input:    string;
+  result:   string;
 }
 
 // ─── Messages ─────────────────────────────────────────────────────────────────
@@ -89,6 +104,8 @@ export interface Message {
         };
       }
   >;
+  /** steps: the agent's tool steps; files: paths it wrote (workspace-relative) */
+  metadata?:  { steps?: SavedStep[]; files?: string[] } | null;
   created_at: string;
 }
 

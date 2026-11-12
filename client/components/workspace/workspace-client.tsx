@@ -1,124 +1,128 @@
 "use client";
 
-/**
- * workspace-client.tsx
- */
-
-import { Project } from "@/types/project";
-import { WorkspaceHeader } from "./workspace-header";
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "../ui/resizable";
-import WorkspaceChat from "./workspace-chat";
+import { useEffect, useRef, useState } from "react";
+import type { Project } from "@/types/project";
 import { useWorkflow } from "@/hooks/use-workflow";
 import { useCodeStream } from "@/hooks/use-code-stream";
-import RightSidebar from "./right-sidebar";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { useRightSidebar } from "@/store/right-sidebar-store";
+import { useCodeStreamStore } from "@/store/code-stream-store";
+import { pickMainFile } from "@/lib/code-files";
+import { cn } from "@/lib/utils";
+import { WorkspaceHeader } from "./workspace-header";
+import { WorkspaceChat } from "./workspace-chat";
 import { WorkspaceActionsProvider } from "./workspace-actions-context";
+import { RightPanel } from "./panel/right-panel";
+import { ResizeHandle } from "./panel/resize-handle";
 
-interface WorkspaceClientProps {
-  initialProject: Project;
-}
+const BUSY_STAGES = ["building", "thinking", "testing", "fixing", "deploying"];
 
-const WorkspaceClient = ({ initialProject }: WorkspaceClientProps) => {
-  const {
-    messages,
-    stage,
-    inProgressMessage,
-    active_role,
-    is_streaming,
-    isThinking,
-    thinkingStatus,
-    stepFeed,
-    error,
-    isLoadingHistory,
-    isHistoryError,
-    isSending,
-    isPendingWorkflowStart,
-    isPaused,
-    pauseReason,
-    pausedRole,
-    pausedIteration,
-    pausedMaxIterations,
-    sendAction,
-    sendActionAsync,
-  } = useWorkflow(initialProject.id);
+/**
+ * Workspace layout. The chat column is always mounted (scroll position and
+ * the half-typed message survive the panel opening and closing). On desktop
+ * the panel slides in beside it; on phones it covers the chat.
+ */
+const WorkspaceClient = ({ initialProject }: { initialProject: Project }) => {
+  const wf = useWorkflow(initialProject.id);
+  useCodeStream(initialProject.id);
 
-  // Only the deploy card consumes this, so a fresh object per render is cheap
-  // and always carries the latest sendActionAsync.
-  const workspaceActions = { projectId: initialProject.id, sendActionAsync };
+  const isMobile = useIsMobile();
+  const { isVisible: panelOpen, expanded, showSettings, showCode, setCodeView, hide } = useRightSidebar();
+  const fileMap = useCodeStreamStore((s) => s.fileMap);
+  const openCode = fileMap.size
+    ? () => {
+        setCodeView("code");
+        showCode(pickMainFile(Array.from(fileMap.keys())) ?? undefined);
+      }
+    : undefined;
 
-  // Second SSE stream — code panel receives file events on a separate channel
-  const { fileCount, isConnected: isCodeConnected } = useCodeStream(initialProject.id);
+  // The panel store is global: start each project with it closed
+  useEffect(() => {
+    hide();
+  }, [initialProject.id, hide]);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [panelWidth, setPanelWidth] = useState(50);
+  const [dragging, setDragging] = useState(false);
 
-  const {
-    showCode,
-    showSettings,
-    setIdle,
-    hide
-  } = useRightSidebar();
+  const isBusy =
+    wf.isSending || wf.is_streaming || wf.isThinking || wf.isPendingWorkflowStart || BUSY_STAGES.includes(wf.stage);
 
-  const { currentState, isVisible } = useRightSidebar();
-
-  const handleTabChange = (tab: string) => {
-    switch (tab) {
-      case "code":
-        showCode();
-        break;
-      case "settings":
-        showSettings();
-        break;
-      case "idle":
-      default:
-        setIdle();
-        break;
-    }
-  };
+  const deployUrl = initialProject.latest_deploy_url ?? null;
+  const chatHidden = panelOpen && (expanded || isMobile);
+  const desktopPanelWidth = !panelOpen ? 0 : expanded ? 100 : panelWidth;
 
   return (
-    <WorkspaceActionsProvider value={workspaceActions}>
-      <WorkspaceHeader
-        projectId={initialProject.id}
-        projectName={initialProject.name}
-        repoUrl={initialProject.repo_url}
-        onOpenSettings={showSettings}
-        isBuilding={["building", "thinking", "testing", "fixing"].includes(stage)}
-        activeTab={currentState}
-        onTabChange={handleTabChange}
-        onDeploy={() => console.log("Deploy")}
-        onShare={() => console.log("Share")}
-      />
-
-      <div style={{ height: "calc(100vh - 56px)" }}>
-        <ResizablePanelGroup orientation="horizontal" className="h-full">
-          <ResizablePanel minSize={500} maxSize={800}>
+    <WorkspaceActionsProvider value={{ projectId: initialProject.id, sendActionAsync: wf.sendActionAsync }}>
+      <div ref={rowRef} className="relative flex h-full min-h-0 w-full overflow-hidden bg-background">
+        {/* Chat column (header + conversation) */}
+        <div
+          className={cn("flex min-w-0 flex-1 flex-col", chatHidden && "invisible absolute inset-0")}
+          aria-hidden={chatHidden || undefined}
+        >
+          <WorkspaceHeader
+            projectId={initialProject.id}
+            projectName={initialProject.name}
+            repoUrl={initialProject.repo_url}
+            deployUrl={deployUrl}
+            onOpenSettings={showSettings}
+            onOpenCode={openCode}
+            showShare={!panelOpen}
+          />
+          <div className="min-h-0 flex-1">
             <WorkspaceChat
               projectId={initialProject.id}
-              messages={messages}
-              stage={stage}
-              inProgressMessage={inProgressMessage}
-              active_role={active_role}
-              is_streaming={is_streaming}
-              isThinking={isThinking}
-              thinkingStatus={thinkingStatus}
-              stepFeed={stepFeed}
-              error={error}
-              isLoadingHistory={isLoadingHistory}
-              isHistoryError={isHistoryError}
-              isSending={isSending}
-              isPendingWorkflowStart={isPendingWorkflowStart}
-              isPaused={isPaused}
-              pauseReason={pauseReason}
-              pausedRole={pausedRole}
-              pausedIteration={pausedIteration}
-              pausedMaxIterations={pausedMaxIterations}
-              sendAction={sendAction}
+              messages={wf.messages}
+              inProgressMessage={wf.inProgressMessage}
+              isStreaming={wf.is_streaming}
+              isThinking={wf.isThinking}
+              thinkingStatus={wf.thinkingStatus}
+              stepFeed={wf.stepFeed}
+              error={wf.error}
+              isLoadingHistory={wf.isLoadingHistory}
+              isPendingWorkflowStart={wf.isPendingWorkflowStart}
+              isBusy={isBusy}
+              isPaused={wf.isPaused}
+              pauseReason={wf.pauseReason}
+              pausedRole={wf.pausedRole}
+              pausedIteration={wf.pausedIteration}
+              pausedMaxIterations={wf.pausedMaxIterations}
+              sendAction={wf.sendAction}
             />
-          </ResizablePanel>
+          </div>
+        </div>
 
-          <ResizableHandle />
-          <ResizablePanel className="w-full">
-            <RightSidebar />
-          </ResizablePanel>
-        </ResizablePanelGroup>
+        {/* Right panel: code or settings */}
+        {isMobile ? (
+          panelOpen && (
+            <div className="fixed inset-0 z-40 bg-background animate-in slide-in-from-right-8 fade-in duration-200">
+              <RightPanel deployUrl={deployUrl} />
+            </div>
+          )
+        ) : (
+          <div
+            className={cn(
+              "relative shrink-0 overflow-hidden",
+              !dragging && "transition-[width] duration-300 ease-out",
+            )}
+            style={{ width: `${desktopPanelWidth}%` }}
+          >
+            {panelOpen && (
+              <>
+                {!expanded && (
+                  <ResizeHandle
+                    containerRef={rowRef}
+                    value={panelWidth}
+                    onChange={setPanelWidth}
+                    onDragChange={setDragging}
+                  />
+                )}
+                <div className="h-full min-w-[320px] animate-in fade-in duration-300">
+                  <RightPanel deployUrl={deployUrl} />
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </WorkspaceActionsProvider>
   );

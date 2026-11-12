@@ -61,6 +61,21 @@ def delete_file(db: Session, project_id: str, path: str) -> None:
     db.commit()
 
 
+def paths_for_project(db: Session, project_id: str) -> list[str]:
+    """Just the saved file paths of a project, sorted."""
+    return list(db.execute(
+        select(ProjectFile.path).where(ProjectFile.project_id == project_id).order_by(ProjectFile.path)
+    ).scalars().all())
+
+
+def files_for_project(db: Session, project_id: str) -> dict[str, str]:
+    """Every saved file of a project as {path: content}, used to restore a sandbox."""
+    rows = db.execute(
+        select(ProjectFile.path, ProjectFile.content).where(ProjectFile.project_id == project_id)
+    ).all()
+    return {path: content for path, content in rows}
+
+
 # ── Async (API) ───────────────────────────────────────────────────
 
 class ProjectFileRepo:

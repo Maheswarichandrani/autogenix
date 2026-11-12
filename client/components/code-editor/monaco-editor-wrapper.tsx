@@ -37,6 +37,12 @@ interface MonacoEditorWrapperProps {
     onChange?: (value: string | undefined) => void;
     readOnly?: boolean;
     className?: string;
+    /** Minimap on the right (default on) */
+    minimap?: boolean;
+    /** File-name badge over the editor (default on) */
+    showFileName?: boolean;
+    /** Focus the editor when it mounts (default on) */
+    autoFocus?: boolean;
 }
 
 // Disable Monaco validation markers (red underlines) for preview mode
@@ -173,6 +179,9 @@ export function MonacoEditorWrapper({
     onChange,
     readOnly = true, // Default to read-only for preview mode
     className,
+    minimap = true,
+    showFileName = true,
+    autoFocus = true,
 }: MonacoEditorWrapperProps) {
     const [isEditorReady, setIsEditorReady] = useState(false);
     const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -223,9 +232,8 @@ export function MonacoEditorWrapper({
             },
         });
 
-        // Focus editor
-        editor.focus();
-    }, []);
+        if (autoFocus) editor.focus();
+    }, [autoFocus]);
 
     // Handle content change
     const handleChange = useCallback(
@@ -249,7 +257,7 @@ export function MonacoEditorWrapper({
                     readOnly,
                     domReadOnly: readOnly, // Prevent any DOM-level editing
                     minimap: {
-                        enabled: true,
+                        enabled: minimap,
                         scale: 1,
                         showSlider: "mouseover",
                     },
@@ -292,7 +300,7 @@ export function MonacoEditorWrapper({
             />
 
             {/* File name indicator */}
-            {fileName && isEditorReady && (
+            {showFileName && fileName && isEditorReady && (
                 <div className="absolute top-2 right-4 px-2 py-1 rounded bg-background/80 backdrop-blur-sm border border-border/50 text-xs text-muted-foreground">
                     {fileName}
                 </div>
