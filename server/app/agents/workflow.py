@@ -76,7 +76,7 @@ def _resettable_list_add(left: list, right: list | None) -> list:
     """
     if right is None:
         return []
-    return left + right
+    return (left or []) + right
 
 from app.core.redis import publish
 from app.core.config import settings
@@ -135,7 +135,9 @@ class GraphState(TypedDict, total=False):
 
     # Persistence
     artifacts:              list
-    messages_to_save:       Annotated[list, _list_add]
+    # Resettable: the worker clears it with update_state({"messages_to_save": None})
+    # after each save, so a message is written to the DB exactly once.
+    messages_to_save:       Annotated[list, _resettable_list_add]
 
 
     # Results
@@ -436,7 +438,12 @@ Examples:
 
 def artificer_node(state: GraphState) -> dict:
     project_id        = state["project_id"]
-    build_id          = state.get("build_id") or str(uuid.uuid4())
+    build_id          = state.get("build_id")
+    if not build_id:
+        # The worker creates the Build row at the interrupt before this node.
+        # Reaching here without one means that step was skipped.
+        build_id = str(uuid.uuid4())
+        log.error("artificer_node: no build_id in state project=%s; using unsaved id %s", project_id, build_id)
     build_description = state.get("build_description", "")
     tech_stack_hint   = state.get("tech_stack_hint")
 
@@ -1176,21 +1183,28 @@ def escalate_node(state: GraphState) -> dict:
     }
 
 
+ENV_VAR_REQUEST_TITLE = "Ready to deploy"
+
+
+def env_var_request_content(build_id: str, build_description: str) -> dict:
+    """Card payload shared by the live SSE event and the persisted artifact."""
+    return {
+        "build_id":       build_id,
+        "status":         "pending",
+        "message":        (
+            "Built and security-tested. Add the environment variables your app "
+            "needs, or deploy without any."
+        ),
+        "suggested_vars": _guess_env_vars(build_description),
+    }
+
+
 def _publish_env_var_request(project_id: str, build_id: str, build_description: str) -> None:
     publish(project_id, {
         "type":          "artifact",
         "artifact_type": "env_var_request",
-        "title":         "Environment Variables Required",
-        "content": json.dumps({
-            "build_id": build_id,
-            "message":  (
-                "Your application is built and security-tested! 🎉\n\n"
-                "To deploy, please provide any environment variables your app needs "
-                "(database URL, API keys, etc.). If your app doesn't need any, "
-                "just submit an empty form."
-            ),
-            "suggested_vars": _guess_env_vars(build_description),
-        }),
+        "title":         ENV_VAR_REQUEST_TITLE,
+        "content":       json.dumps(env_var_request_content(build_id, build_description)),
     })
     publish(project_id, {"type": "stage_change", "stage": WorkflowStage.WAITING_ENV.value})
     publish(project_id, {"type": "done"})
@@ -1459,6 +1473,8 @@ def create_workflow(db_url: str | None = None):
 
     Interrupt strategy:
       interrupt_before=["conductor"]  — park between user messages
+      interrupt_before=["artificer"]  — brief pause so the worker creates the Build
+                                        row first; the worker resumes immediately
       interrupt_before=["deployer"]   — park after security tests, before deploy
                                         so deploy_confirm_task can inject credentials
     """
@@ -1508,5 +1524,5 @@ def create_workflow(db_url: str | None = None):
 
     return graph.compile(
         checkpointer     = checkpointer,
-        interrupt_before = ["conductor", "deployer"],
+        interrupt_before = ["conductor", "artificer", "deployer"],
     )

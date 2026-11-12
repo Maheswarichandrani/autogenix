@@ -146,13 +146,16 @@ def _create_build(db: Session, project_id: str, description: str = "") -> str:
     """Create a Build row and return its string ID."""
     from app.models import Build
 
-    # Use SELECT FOR UPDATE to prevent duplicate build_numbers under concurrency
-    result  = db.execute(
+    from app.models import Project
+
+    # Lock the project row so two builds can't take the same build_number.
+    # (Postgres rejects FOR UPDATE on an aggregate like max(), which is why
+    # this used to fail and no Build row was ever created.)
+    db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
+    next_num = db.execute(
         select(func.coalesce(func.max(Build.build_number), 0))
         .where(Build.project_id == project_id)
-        .with_for_update()
-    )
-    next_num = result.scalar_one() + 1
+    ).scalar_one() + 1
 
     build = Build(
         project_id    = project_id,
@@ -280,6 +283,59 @@ def _finalise_if_escalated(wf, config: dict, db: Session, state: dict) -> None:
     state["escalation_reason"] = None
 
 
+def _persist_deploy_card(
+    db: Session, project_id: str, build_id: str | None,
+    artifact_type: str, title: str, content: dict,
+) -> None:
+    """
+    Store the deploy card so it survives a page reload.
+
+    Written directly (not via messages_to_save) so it can be idempotent per
+    build: a re-park at the deployer must not add a second card. Skipped if an unsubmitted card of this
+    type for this build already exists. Content holds key names only.
+    """
+    from sqlalchemy import select
+    from app.models import Message, Artifact, Build
+
+    existing = db.execute(
+        select(Artifact).where(
+            Artifact.project_id == project_id,
+            Artifact.artifact_type == artifact_type,
+            Artifact.content["build_id"].astext == (build_id or ""),
+        )
+    ).scalars().all()
+    if any((a.content or {}).get("status") != "submitted" for a in existing):
+        return
+
+    # FK guard: the Build row can be missing (known defect); keep the id in content.
+    import uuid as _uuid
+    try:
+        build_uuid = _uuid.UUID(build_id) if build_id else None
+    except ValueError:
+        build_uuid = None
+    build_fk = build_uuid if build_uuid and db.get(Build, build_uuid) else None
+
+    card = Artifact(
+        project_id    = project_id,
+        build_id      = build_fk,
+        artifact_type = artifact_type,
+        title         = title,
+        content       = content,
+    )
+    db.add(card)
+    db.flush()
+    db.add(Message(
+        project_id   = project_id,
+        role         = "deployer",
+        message_type = "assistant_response",
+        content      = [{"type": "artifact", "artifact_id": str(card.id)}],
+        # Same clock as the agent messages (_msg uses the worker's time); the DB
+        # default uses the DB server's clock, which can sort the card above them.
+        created_at   = datetime.now(timezone.utc),
+    ))
+    db.commit()
+
+
 def _stream_until_interrupt_or_end(wf, config: dict, db: Session, project_id: str) -> dict:
     """
     Drive the graph forward until it either:
@@ -304,6 +360,14 @@ def _stream_until_interrupt_or_end(wf, config: dict, db: Session, project_id: st
             log.info("Build created project=%s build=%s", project_id, build_id)
 
         next_nodes = list(snap.next or [])
+
+        if "deployer" in next_nodes:
+            from app.agents.workflow import ENV_VAR_REQUEST_TITLE, env_var_request_content
+            build_id = state.get("build_id") or ""
+            _persist_deploy_card(
+                db, project_id, build_id, "env_var_request", ENV_VAR_REQUEST_TITLE,
+                env_var_request_content(build_id, state.get("build_description", "")),
+            )
 
         # Stopped at interrupt or reached END
         if not next_nodes or "conductor" in next_nodes or "deployer" in next_nodes:
@@ -401,8 +465,7 @@ def start_workflow_task(
             "security_issues":      [],
             "all_security_issues":  [],
             "artifacts":            [],
-            "messages_to_save":     [],
-            "_saved_msg_count":     0,
+            "messages_to_save":     None,
             "repo_url":             None,
             "deploy_url":           None,
             "error":                None,
@@ -416,7 +479,7 @@ def start_workflow_task(
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
-        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        wf.update_state(config, {"messages_to_save": None})
         _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
@@ -457,8 +520,7 @@ def start_workflow_task(
                 "security_issues":      [],
                 "all_security_issues":  [],
                 "artifacts":            [],
-                "messages_to_save":     [],
-                "_saved_msg_count":     0,
+                "messages_to_save":     None,
                 "repo_url":             None,
                 "deploy_url":           None,
                 "error":                str(e),
@@ -556,8 +618,7 @@ def resume_workflow_task(
                 "security_issues":      [],
                 "all_security_issues":  [],
                 "artifacts":            [],
-                "messages_to_save":     [],
-                "_saved_msg_count":     0,
+                "messages_to_save":     None,
                 "repo_url":             None,
                 "deploy_url":           None,
                 "error":                None,
@@ -566,7 +627,7 @@ def resume_workflow_task(
             # Now run conductor with the user's new message
             state = _stream_until_interrupt_or_end(wf, config, db, project_id)
             _save_state_to_db(db, state, project_id, state.get("build_id"))
-            wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+            wf.update_state(config, {"messages_to_save": None})
             _finalise_if_escalated(wf, config, db, state)
 
             snap = wf.get_state(config)
@@ -589,7 +650,7 @@ def resume_workflow_task(
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
-        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        wf.update_state(config, {"messages_to_save": None})
         _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
@@ -626,8 +687,7 @@ def resume_workflow_task(
                 "security_issues":      [],
                 "all_security_issues":  [],
                 "artifacts":            [],
-                "messages_to_save":     [],
-                "_saved_msg_count":     0,
+                "messages_to_save":     None,
                 "repo_url":             None,
                 "deploy_url":           None,
                 "error":                str(e),
@@ -677,7 +737,7 @@ def railway_connect_task(self, project_id: str, thread_id: str) -> None:
 
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
         _save_state_to_db(db, state, project_id, state.get("build_id"))
-        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        wf.update_state(config, {"messages_to_save": None})
         _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
@@ -765,8 +825,11 @@ def deploy_confirm_task(
 
         if not user.railway_api_key_encrypted:
             # Emit connect_railway card — do NOT resume graph yet
-            build_id = (snap.values or {}).get("build_id", "")
-            _publish_connect_railway(project_id, build_id)
+            # The submitted env vars are dropped here; the card asks for them again.
+            values = snap.values or {}
+            _publish_connect_railway(
+                db, project_id, values.get("build_id") or "", values.get("build_description", ""),
+            )
             return
 
         # ── Decrypt into process memory only (never graph state) ──
@@ -791,7 +854,7 @@ def deploy_confirm_task(
         state = _stream_until_interrupt_or_end(wf, config, db, project_id)
 
         _save_state_to_db(db, state, project_id, state.get("build_id"))
-        wf.update_state(config, {"_saved_msg_count": state.get("_saved_msg_count", 0)})
+        wf.update_state(config, {"messages_to_save": None})
         _finalise_if_escalated(wf, config, db, state)
 
         snap = wf.get_state(config)
@@ -812,28 +875,31 @@ def deploy_confirm_task(
 
 # ── Connect Railway helper ────────────────────────────────────────
 
-def _publish_connect_railway(project_id: str, build_id: str) -> None:
+def _publish_connect_railway(db: Session, project_id: str, build_id: str, build_description: str) -> None:
     """
-    Emit connect_railway SSE event directly (graph stays paused at deployer interrupt).
-    Called when user hasn't set their Railway API key yet.
+    Emit and persist the connect_railway card (graph stays paused at the deployer
+    interrupt). It renders the same deploy form, with the Railway step shown, so
+    the user re-enters env vars and deploys in one go. Rare: the card normally
+    saves the Railway key before submitting.
     """
     import json
     from app.core.redis import publish
+    from app.agents.workflow import env_var_request_content
 
+    title   = "Connect Railway to deploy"
+    content = {
+        **env_var_request_content(build_id, build_description),
+        "message": (
+            "Railway is not connected yet. Add your Railway API token, then "
+            "re-enter the environment variables your app needs."
+        ),
+    }
+    _persist_deploy_card(db, project_id, build_id, "connect_railway", title, content)
     publish(project_id, {
         "type":          "artifact",
         "artifact_type": "connect_railway",
-        "title":         "Connect Railway to Deploy",
-        "content": json.dumps({
-            "build_id": build_id,
-            "status":   "waiting_for_railway_key",
-            "message":  (
-                "🚂 Almost there! Your app is built and security-tested.\n\n"
-                "To deploy, connect your Railway account once — "
-                "future deployments are fully automatic.\n\n"
-                "Get your token: railway.app → Account Settings → Tokens"
-            ),
-        }),
+        "title":         title,
+        "content":       json.dumps(content),
     })
     publish(project_id, {"type": "done"})
     _close_streams(project_id)  # This workflow path ends here

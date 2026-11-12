@@ -32,3 +32,4 @@ class Project(Base):
     builds: Mapped[list["Build"]] = relationship("Build", back_populates="project")
     artifacts: Mapped[list["Artifact"]] = relationship("Artifact", back_populates="project")
     env_vars: Mapped[list["ProjectEnvVar"]] = relationship("ProjectEnvVar", back_populates="project")
+    files: Mapped[list["ProjectFile"]] = relationship("ProjectFile", back_populates="project", cascade="all, delete-orphan", passive_deletes=True)

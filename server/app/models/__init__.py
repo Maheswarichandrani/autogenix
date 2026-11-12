@@ -11,6 +11,7 @@ from .build import Build
 from .message import Message
 from .artifact import Artifact
 from .project_env_var import ProjectEnvVar
+from .project_file import ProjectFile
 
 __all__ = [
     "User",
@@ -19,4 +20,5 @@ __all__ = [
     "Message",
     "Artifact",
     "ProjectEnvVar",
+    "ProjectFile",
 ]

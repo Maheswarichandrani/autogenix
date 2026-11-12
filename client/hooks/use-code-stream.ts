@@ -19,6 +19,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { flushSync } from "react-dom";
 import { useCodeStreamStore } from "@/store/code-stream-store";
 import type { CodeStreamEvent } from "@/store/code-stream-store";
+import { projectsAPI } from "@/lib/api/projects";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -131,9 +132,23 @@ export function useCodeStream(projectId: string) {
         };
     }, [connectSSE, setConnected]);
 
-    // Reset state when project changes
+    // Reset when the project changes, then load the files stored on the server
+    // so the code survives reloads and leaving the workspace.
     useEffect(() => {
         reset();
+        if (!projectId || projectId === "undefined") return;
+        let cancelled = false;
+        projectsAPI.getFiles(projectId).then((res) => {
+            if (cancelled) return;
+            if (res.error || !res.data) {
+                console.error("[CodeStream] Could not load stored files:", res.error);
+                return;
+            }
+            useCodeStreamStore.getState().seedFiles(res.data);
+        });
+        return () => {
+            cancelled = true;
+        };
     }, [projectId, reset]);
 
     /**
