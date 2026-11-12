@@ -63,6 +63,8 @@ export function Composer({
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`;
+    // Scroll only once past the cap; below it the box simply grows
+    el.style.overflowY = el.scrollHeight > MAX_HEIGHT ? "auto" : "hidden";
   }, [value]);
 
   const canSend = value.trim().length > 0 && !isBusy;
@@ -115,7 +117,7 @@ export function Composer({
           }}
           placeholder="Write a message..."
           aria-label="Message"
-          className="max-h-50 min-h-9 flex-1 resize-none bg-transparent py-1.75 text-[16px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-[17px]"
+          className="scrollbar-hide max-h-50 min-h-9 flex-1 resize-none overflow-y-hidden bg-transparent py-1.75 text-[16px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-[17px]"
         />
 
         {isBusy ? (
