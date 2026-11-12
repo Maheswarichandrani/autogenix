@@ -5,6 +5,7 @@ import type { Message } from "@/types/workflow";
 import { ArtifactCard } from "../artifact-card";
 import { ReplyMarkdown } from "./reply-markdown";
 import { StepSummary } from "./step-summary";
+import { FileCards } from "./file-cards";
 import { savedStepsToView } from "./steps";
 
 /** A finished agent message: step summary, reply text, cards. No avatar or bubble. */
@@ -13,7 +14,7 @@ export const AgentReply = memo(function AgentReply({
   footer,
 }: {
   message: Message;
-  /** Code card / action row rendered under this reply */
+  /** Action row rendered under this reply */
   footer?: ReactNode;
 }) {
   const saved = message.metadata?.steps;
@@ -39,6 +40,7 @@ export const AgentReply = memo(function AgentReply({
           return null;
         })}
       </div>
+      <FileCards paths={message.metadata?.files ?? []} />
       {footer}
     </div>
   );

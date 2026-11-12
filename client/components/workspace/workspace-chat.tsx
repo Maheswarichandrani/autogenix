@@ -5,6 +5,7 @@ import { AlertCircle, Loader2 } from "lucide-react";
 import type { Message, StepFeedItem, UserAction } from "@/types/workflow";
 import type { InProgressMessage } from "@/store/workflow-store";
 import { useStickToBottom } from "@/hooks/use-stick-to-bottom";
+import { useWorkflowStore } from "@/store/workflow-store";
 import { ChatThread } from "./chat/chat-thread";
 import { LiveReply } from "./chat/live-reply";
 import { PausedNotice } from "./chat/paused-notice";
@@ -13,7 +14,6 @@ import { Composer } from "./chat/composer";
 
 interface WorkspaceChatProps {
   projectId: string;
-  projectName: string;
   messages: Message[];
   inProgressMessage: InProgressMessage | null;
   isStreaming: boolean;
@@ -35,7 +35,6 @@ interface WorkspaceChatProps {
 /** Centred conversation column with the composer pinned underneath. */
 export function WorkspaceChat({
   projectId,
-  projectName,
   messages,
   inProgressMessage,
   isStreaming,
@@ -54,10 +53,11 @@ export function WorkspaceChat({
   sendAction,
 }: WorkspaceChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const liveFiles = useWorkflowStore((s) => s.liveFiles);
   const showLive = !!inProgressMessage || isThinking || isPendingWorkflowStart;
 
   // Anything that grows the conversation re-pins the view (if already at the bottom)
-  const contentKey = `${messages.length}|${inProgressMessage?.text.length ?? 0}|${stepFeed.length}|${showLive}|${isPaused}`;
+  const contentKey = `${messages.length}|${inProgressMessage?.text.length ?? 0}|${stepFeed.length}|${liveFiles.length}|${showLive}|${isPaused}`;
   const { isAtBottom, scrollToBottom } = useStickToBottom(scrollRef, contentKey);
 
   const send = (content: string) => sendAction({ action: "send_message", content });
@@ -72,7 +72,7 @@ export function WorkspaceChat({
             </div>
           )}
 
-          <ChatThread messages={messages} projectName={projectName} isBusy={isBusy} onRetry={send} />
+          <ChatThread messages={messages} isBusy={isBusy} onRetry={send} />
 
           {showLive && (
             <LiveReply
@@ -80,6 +80,7 @@ export function WorkspaceChat({
               isStreaming={isStreaming}
               thinkingStatus={thinkingStatus ?? (inProgressMessage ? null : "Preparing your request")}
               stepFeed={stepFeed}
+              liveFiles={liveFiles}
             />
           )}
 

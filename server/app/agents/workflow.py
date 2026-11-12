@@ -191,7 +191,41 @@ def _steps_metadata(tool_log: list | None) -> dict | None:
             "input":    str(entry.get("preview") or "")[:300],
             "result":   output[:500],
         })
-    return {"steps": steps} if steps else None
+    files = _written_files(tool_log)
+    metadata = {}
+    if steps:
+        metadata["steps"] = steps
+    if files:
+        metadata["files"] = files
+    return metadata or None
+
+
+MAX_SAVED_FILES = 100
+
+
+def _written_files(tool_log: list | None) -> list[str]:
+    """
+    Workspace-relative paths this agent wrote and did not later delete, in
+    first-write order. Read from the tool input dict, never from the display
+    preview (which is redacted when the content mentions a secret).
+    """
+    from app.repositories.project_file_repo import normalise_path
+
+    files: list[str] = []
+    for entry in tool_log or []:
+        if not isinstance(entry, dict) or not isinstance(entry.get("input"), dict):
+            continue
+        if str(entry.get("output") or "").startswith("❌"):
+            continue
+        path = entry["input"].get("path")
+        if not isinstance(path, str) or not path.strip():
+            continue
+        path = normalise_path(path)
+        if entry.get("tool") == "write_file" and path not in files:
+            files.append(path)
+        elif entry.get("tool") == "delete_file" and path in files:
+            files.remove(path)
+    return files[:MAX_SAVED_FILES]
 
 
 def _msg(role: str, message_type: str, text: str, steps: list | None = None) -> dict:

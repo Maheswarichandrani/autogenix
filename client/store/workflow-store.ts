@@ -74,6 +74,10 @@ interface WorkflowStore {
   // ── Sandbox URL of the running app (session only, from app_ready)
   appUrl: string | null;
 
+  // ── Files the current agent has written (from the code stream)
+  liveFiles: string[];
+  noteFileEvent: (event: { type: "file_created" | "file_deleted"; path: string }) => void;
+
   // ── Actions
   hydrateMessages: (messages: Message[]) => void;
   addOptimisticMessage: (message: Message) => void;
@@ -104,6 +108,7 @@ const INITIAL_STATE = {
   stepFeed: [] as StepFeedItem[],
   inProgressMessage: null as InProgressMessage | null,
   appUrl: null as string | null,
+  liveFiles: [] as string[],
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -118,7 +123,7 @@ function toSavedSteps(steps: StepFeedItem[]): SavedStep[] {
   }));
 }
 
-function commitInProgress(ip: InProgressMessage, steps: StepFeedItem[] = []): Message | null {
+function commitInProgress(ip: InProgressMessage, steps: StepFeedItem[] = [], files: string[] = []): Message | null {
   const content: Message["content"] = [];
 
   if (ip.artifact) {
@@ -140,7 +145,9 @@ function commitInProgress(ip: InProgressMessage, steps: StepFeedItem[] = []): Me
     role: ip.role as Message["role"],
     message_type: "assistant_response",
     content,
-    metadata: steps.length ? { steps: toSavedSteps(steps) } : null,
+    metadata: steps.length || files.length
+      ? { ...(steps.length ? { steps: toSavedSteps(steps) } : {}), ...(files.length ? { files } : {}) }
+      : null,
     created_at: new Date().toISOString(),
   };
 }
@@ -197,6 +204,15 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
 
   setWorkflowPending: (pending: boolean) => {
     set({ isPendingWorkflowStart: pending });
+  },
+
+  noteFileEvent: (event) => {
+    set((s) => {
+      if (event.type === "file_created") {
+        return s.liveFiles.includes(event.path) ? s : { liveFiles: [...s.liveFiles, event.path] };
+      }
+      return { liveFiles: s.liveFiles.filter((p) => p !== event.path) };
+    });
   },
 
   /**
@@ -304,7 +320,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       // ── Agent starting ────────────────────────────────────────
       case "agent_start": {
         const existing = get().inProgressMessage;
-        const toCommit = existing ? commitInProgress(existing, get().stepFeed) : null;
+        const toCommit = existing ? commitInProgress(existing, get().stepFeed, get().liveFiles) : null;
 
         set((s) => ({
           active_role: event.role,
@@ -314,6 +330,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
           // Clear the step feed when a new agent starts — each agent
           // gets its own clean feed during its execution window.
           stepFeed: [],
+          liveFiles: [],
           inProgressMessage: { role: event.role, text: "", artifact: null },
           messages: toCommit ? [...s.messages, toCommit] : s.messages,
         }));
@@ -374,7 +391,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       case "done": {
         const ip = get().inProgressMessage;
         set((s) => {
-          const committed = ip ? commitInProgress(ip, get().stepFeed) : null;
+          const committed = ip ? commitInProgress(ip, get().stepFeed, get().liveFiles) : null;
           const updatedMessages = committed ? [...s.messages, committed] : s.messages;
 
           // Sort by created_at to maintain chronological order
@@ -430,7 +447,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       case "build_failed":
         set((s) => {
           const ip = s.inProgressMessage;
-          const committed = ip ? commitInProgress(ip, get().stepFeed) : null;
+          const committed = ip ? commitInProgress(ip, get().stepFeed, get().liveFiles) : null;
           const updatedMessages = committed ? [...s.messages, committed] : s.messages;
 
           // Sort by created_at to maintain chronological order
@@ -499,7 +516,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       case "agent_cancelled":
         set((s) => {
           const ip = s.inProgressMessage;
-          const committed = ip ? commitInProgress(ip, get().stepFeed) : null;
+          const committed = ip ? commitInProgress(ip, get().stepFeed, get().liveFiles) : null;
           const updatedMessages = committed ? [...s.messages, committed] : s.messages;
           return {
             isPaused: false,

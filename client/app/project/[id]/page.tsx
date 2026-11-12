@@ -1,6 +1,4 @@
 import WorkspaceClient from "@/components/workspace/workspace-client";
-import { AppSidebar } from "@/components/home/app-sidebar";
-import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { projectsAPI } from "@/lib/api";
 import { Metadata } from "next";
 
@@ -55,13 +53,8 @@ const ProjectPage = async ({
     const project = response.data;
 
     return (
-        // Sidebar starts closed; the header's toggle opens it off-canvas.
-        <SidebarProvider defaultOpen={false}>
-            <AppSidebar collapsible="offcanvas" />
-            <SidebarInset className="h-screen min-w-0 overflow-hidden">
-                <WorkspaceClient initialProject={project} />
-            </SidebarInset>
-        </SidebarProvider>
+        // Keyed so switching projects starts from a clean workspace
+        <WorkspaceClient key={project.id} initialProject={project} />
     );
   } catch (error) {
     console.error("Error fetching project:", error);

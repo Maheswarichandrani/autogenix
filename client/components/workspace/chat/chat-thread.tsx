@@ -3,7 +3,6 @@
 import { Fragment, useMemo } from "react";
 import type { Message } from "@/types/workflow";
 import { AgentReply } from "./agent-reply";
-import { CodeCard } from "./code-card";
 import { MessageActions } from "./message-actions";
 import { UserBubble, messageText } from "./user-bubble";
 
@@ -26,21 +25,15 @@ function groupTurns(messages: Message[]): Turn[] {
 /** Committed conversation history. */
 export function ChatThread({
   messages,
-  projectName,
   isBusy,
   onRetry,
 }: {
   messages: Message[];
-  projectName: string;
   /** A build is running: the latest turn is not finished yet */
   isBusy: boolean;
   onRetry: (text: string) => void;
 }) {
   const turns = useMemo(() => groupTurns(messages), [messages]);
-  const lastArtificerId = useMemo(
-    () => [...messages].reverse().find((m) => m.role === "artificer")?.id,
-    [messages],
-  );
 
   return (
     <>
@@ -71,7 +64,6 @@ export function ChatThread({
                   message={m}
                   footer={
                     <>
-                      {m.id === lastArtificerId && <CodeCard title={projectName} />}
                       {isLast && showActions && (
                         <MessageActions
                           messageId={m.id}

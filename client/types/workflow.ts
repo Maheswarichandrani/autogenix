@@ -102,7 +102,8 @@ export interface Message {
         };
       }
   >;
-  metadata?:  { steps?: SavedStep[] } | null;
+  /** steps: the agent's tool steps; files: paths it wrote (workspace-relative) */
+  metadata?:  { steps?: SavedStep[]; files?: string[] } | null;
   created_at: string;
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Project } from "@/types/project";
 import { useWorkflow } from "@/hooks/use-workflow";
 import { useCodeStream } from "@/hooks/use-code-stream";
@@ -25,7 +25,12 @@ const WorkspaceClient = ({ initialProject }: { initialProject: Project }) => {
   useCodeStream(initialProject.id);
 
   const isMobile = useIsMobile();
-  const { isVisible: panelOpen, expanded, showSettings } = useRightSidebar();
+  const { isVisible: panelOpen, expanded, showSettings, hide } = useRightSidebar();
+
+  // The panel store is global: start each project with it closed
+  useEffect(() => {
+    hide();
+  }, [initialProject.id, hide]);
   const rowRef = useRef<HTMLDivElement>(null);
   const [panelWidth, setPanelWidth] = useState(50);
   const [dragging, setDragging] = useState(false);
@@ -56,7 +61,6 @@ const WorkspaceClient = ({ initialProject }: { initialProject: Project }) => {
           <div className="min-h-0 flex-1">
             <WorkspaceChat
               projectId={initialProject.id}
-              projectName={initialProject.name}
               messages={wf.messages}
               inProgressMessage={wf.inProgressMessage}
               isStreaming={wf.is_streaming}
