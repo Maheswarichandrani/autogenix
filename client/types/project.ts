@@ -21,6 +21,9 @@ export interface Project {
   repo_url?: string | null;
   latest_deploy_url?: string | null;
 
+  /** List endpoint only: what the project is doing now (sidebar dot) */
+  activity?: ProjectActivity | null;
+
   // LangGraph integration
   langgraph_thread_id?: string | null;
 
@@ -68,3 +71,5 @@ export interface ProjectListParams {
   limit?: number;
   status?: string;
 }
+
+export type ProjectActivity = "building" | "awaiting_deploy" | "deployed";

@@ -14,10 +14,34 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { projectsAPI } from "@/lib/api/projects";
+import type { ProjectActivity } from "@/types/project";
 import { cn } from "@/lib/utils";
 
 const LIMIT = 30;
+
+const ACTIVITY: Record<ProjectActivity, { label: string; dot: string }> = {
+  building:        { label: "Building",           dot: "bg-primary animate-pulse" },
+  awaiting_deploy: { label: "Waiting for deploy", dot: "bg-amber-500" },
+  deployed:        { label: "Deployed",           dot: "bg-emerald-500" },
+};
+
+/** Small status dot; idle projects get a faint one. */
+function StatusDot({ activity }: { activity?: ProjectActivity | null }) {
+  const info = activity ? ACTIVITY[activity] : null;
+  if (!info) {
+    return <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-sidebar-foreground/25" />;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span role="img" aria-label={info.label} className={cn("size-2 shrink-0 rounded-full", info.dot)} />
+      </TooltipTrigger>
+      <TooltipContent side="right">{info.label}</TooltipContent>
+    </Tooltip>
+  );
+}
 const OPEN_KEY = "autogenix-sidebar-recents-open";
 
 function readOpen(): boolean {
@@ -28,7 +52,7 @@ function readOpen(): boolean {
   }
 }
 
-/** The user's projects, newest first; the current one is highlighted. */
+/** The user's projects, newest first, with a status dot; the current one is highlighted. */
 export function SidebarRecents() {
   const pathname = usePathname();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -66,7 +90,7 @@ export function SidebarRecents() {
         aria-expanded={open}
         className="flex h-8 w-fit items-center gap-1 rounded-md px-2 text-[13px] font-medium text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground"
       >
-        Recents
+        Projects
         <ChevronDown className={cn("size-3.5 transition-transform duration-200", !open && "-rotate-90")} />
       </button>
 
@@ -100,13 +124,7 @@ export function SidebarRecents() {
                       className="h-9 text-[15px] data-[active=true]:font-normal"
                     >
                       <Link href={href} onClick={() => isMobile && setOpenMobile(false)} title={p.name}>
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "size-1.5 shrink-0 rounded-full",
-                            active ? "bg-sidebar-foreground/70" : "bg-sidebar-foreground/25",
-                          )}
-                        />
+                        <StatusDot activity={p.activity} />
                         <span className="truncate">{p.name}</span>
                       </Link>
                     </SidebarMenuButton>

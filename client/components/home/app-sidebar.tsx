@@ -23,7 +23,7 @@ import { SidebarUser } from "./sidebar/sidebar-user";
 
 const NAV = [
   { name: "New project", url: "/home", icon: Plus },
-  { name: "Projects", url: "/home/projects", icon: Folder },
+  { name: "All projects", url: "/home/projects", icon: Folder },
   { name: "Settings", url: "/home/settings/general", icon: Settings },
 ];
 

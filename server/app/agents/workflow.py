@@ -279,6 +279,9 @@ Rules:
 - If the project already has code, a request to add, change or fix something in it is a
   build: call start_build and describe the change. The builder edits the existing files;
   do not ask the user to share their code.
+- If the project Name is "New project", "Untitled Project" or starts with "Project for:", it is
+  a placeholder: also pass project_title, a 3-5 word Title Case name for what the user is
+  building (e.g. "Team Todo API", "Bookstore REST API"). Otherwise leave project_title out.
 - If the intent is ambiguous, use respond_to_user to ask one focused clarifying question.
 - Only respond correctly for backend related user queries.
 - if asked out of scope, politely decline and suggest focusing on backend topics.
@@ -312,6 +315,10 @@ _CONDUCTOR_TOOLS = [
                     "type": "string",
                     "description": "Detailed description of what to build.",
                 },
+                "project_title": {
+                    "type": "string",
+                    "description": "Only when the project Name is a placeholder: a 3-5 word Title Case name for the project, e.g. 'Team Todo API'. No quotes or emoji.",
+                },
                 "tech_stack": {
                     "type": "object",
                     "description": "Optional tech stack (only what the user specified).",
@@ -332,11 +339,48 @@ _CONDUCTOR_TOOLS = [
             "type": "object",
             "properties": {
                 "message": {"type": "string", "description": "The response to send."},
+                "project_title": {
+                    "type": "string",
+                    "description": "Only when the project Name is a placeholder: a 3-5 word Title Case name for the project, e.g. 'Team Todo API'. No quotes or emoji.",
+                },
             },
             "required": ["message"],
         },
     },
 ]
+
+
+_TITLE_JUNK = re.compile(r"[\x00-\x1f\x7f\"'`*_#<>]")
+
+
+def _maybe_rename_project(project_id: str, title: object) -> None:
+    """
+    Give a placeholder-named project the Conductor's short title. A name the
+    user chose is never changed. Cosmetic: a failure is logged, never raised.
+    """
+    if not isinstance(title, str):
+        return
+    clean = " ".join(_TITLE_JUNK.sub("", title).split())[:60].strip()
+    if len(clean) < 2:
+        return
+    from app.models.project import Project
+    from app.repositories.project_repo import is_placeholder_name
+    from app.tasks.build_worker import _get_session  # lazy: avoids import cycle
+
+    db = _get_session()
+    try:
+        project = db.get(Project, project_id)
+        if project is None or not is_placeholder_name(project.name):
+            return
+        project.name = clean
+        db.commit()
+        publish(project_id, {"type": "project_renamed", "name": clean})
+        log.info("Project %s named %r", project_id, clean)
+    except Exception:
+        db.rollback()
+        log.exception("Could not rename project %s", project_id)
+    finally:
+        db.close()
 
 
 def conductor_node(state: GraphState) -> dict:
@@ -392,6 +436,8 @@ def conductor_node(state: GraphState) -> dict:
     tc        = response.tool_calls[0]
     tool_name = tc["name"]
     tool_args = tc["args"]
+
+    _maybe_rename_project(project_id, tool_args.get("project_title"))
 
     if tool_name == "start_build":
         description = tool_args.get("description", user_message)

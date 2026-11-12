@@ -49,7 +49,9 @@ export type SSEEvent =
   | { type: "agent_cancelled"; role: string; reason: string }
   | { type: "model_switched";  role: string; old_model: string; new_model: string }
   // The generated app is up in the sandbox (session only; used by the preview)
-  | { type: "app_ready";       url: string };
+  | { type: "app_ready";       url: string }
+  // The Conductor gave a placeholder-named project its short title
+  | { type: "project_renamed"; name: string };
 
 // ─── Step feed item (built from step/tool_call/tool_result events) ────────────
 
