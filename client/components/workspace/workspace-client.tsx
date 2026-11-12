@@ -6,6 +6,8 @@ import { useWorkflow } from "@/hooks/use-workflow";
 import { useCodeStream } from "@/hooks/use-code-stream";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { useRightSidebar } from "@/store/right-sidebar-store";
+import { useCodeStreamStore } from "@/store/code-stream-store";
+import { pickMainFile } from "@/lib/code-files";
 import { cn } from "@/lib/utils";
 import { WorkspaceHeader } from "./workspace-header";
 import { WorkspaceChat } from "./workspace-chat";
@@ -25,7 +27,14 @@ const WorkspaceClient = ({ initialProject }: { initialProject: Project }) => {
   useCodeStream(initialProject.id);
 
   const isMobile = useIsMobile();
-  const { isVisible: panelOpen, expanded, showSettings, hide } = useRightSidebar();
+  const { isVisible: panelOpen, expanded, showSettings, showCode, setCodeView, hide } = useRightSidebar();
+  const fileMap = useCodeStreamStore((s) => s.fileMap);
+  const openCode = fileMap.size
+    ? () => {
+        setCodeView("code");
+        showCode(pickMainFile(Array.from(fileMap.keys())) ?? undefined);
+      }
+    : undefined;
 
   // The panel store is global: start each project with it closed
   useEffect(() => {
@@ -56,6 +65,7 @@ const WorkspaceClient = ({ initialProject }: { initialProject: Project }) => {
             repoUrl={initialProject.repo_url}
             deployUrl={deployUrl}
             onOpenSettings={showSettings}
+            onOpenCode={openCode}
             showShare={!panelOpen}
           />
           <div className="min-h-0 flex-1">

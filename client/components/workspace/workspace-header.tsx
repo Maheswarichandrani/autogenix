@@ -1,6 +1,6 @@
 "use client";
 
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, PanelRight } from "lucide-react";
 import { useSidebar } from "@/components/ui/sidebar";
 import { IconAction } from "./icon-action";
 import { ProjectMenu } from "./header/project-menu";
@@ -12,6 +12,8 @@ interface WorkspaceHeaderProps {
   repoUrl?: string | null;
   deployUrl?: string | null;
   onOpenSettings: () => void;
+  /** Opens the code panel; undefined while the project has no files */
+  onOpenCode?: () => void;
   /** Hidden while the code panel is open (the panel has its own header) */
   showShare?: boolean;
 }
@@ -23,6 +25,7 @@ export function WorkspaceHeader({
   repoUrl,
   deployUrl,
   onOpenSettings,
+  onOpenCode,
   showShare = true,
 }: WorkspaceHeaderProps) {
   const { toggleSidebar } = useSidebar();
@@ -40,7 +43,14 @@ export function WorkspaceHeader({
           onOpenSettings={onOpenSettings}
         />
       </div>
-      {showShare && <ShareMenu deployUrl={deployUrl} repoUrl={repoUrl} />}
+      {showShare && (
+        <div className="flex shrink-0 items-center gap-1">
+          <IconAction label={onOpenCode ? "Code" : "No files yet"} onClick={onOpenCode} disabled={!onOpenCode}>
+            <PanelRight />
+          </IconAction>
+          <ShareMenu deployUrl={deployUrl} repoUrl={repoUrl} />
+        </div>
+      )}
     </header>
   );
 }
