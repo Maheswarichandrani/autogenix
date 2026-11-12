@@ -80,6 +80,7 @@ def _resettable_list_add(left: list, right: list | None) -> list:
 
 from app.core.redis import publish
 from app.core.config import settings
+from app.agents.sandbox import ensure_sandbox, restore_project_files, saved_paths, sync_workspace_to_db
 from app.core.docker_manager import DockerManager, RunConfig
 from app.core.llm import get_llm
 from app.core.stacks import SUPPORTED_STACK_NAMES, get_stack, resolve_tech_stack
@@ -257,6 +258,7 @@ Analyse the user's message and call EXACTLY ONE of the two tools:
 Project context:
   Name:        {project_name}
   Description: {project_description}
+  Existing code: {existing_code}
 
 User context:
   Default stack:   {default_stack}
@@ -274,6 +276,9 @@ Rules:
   yet, and list the supported stacks.
 - Match how much you explain to the developer level. Never change what gets built
   because of it.
+- If the project already has code, a request to add, change or fix something in it is a
+  build: call start_build and describe the change. The builder edits the existing files;
+  do not ask the user to share their code.
 - If the intent is ambiguous, use respond_to_user to ask one focused clarifying question.
 - Only respond correctly for backend related user queries.
 - if asked out of scope, politely decline and suggest focusing on backend topics.
@@ -281,6 +286,20 @@ Rules:
 """
 
 _DEVELOPER_LEVELS = ("beginner", "intermediate", "advanced", "founder")
+
+
+def _existing_code_summary(project_id: str) -> str:
+    """One line for the Conductor: which files this project already has."""
+    try:
+        paths = saved_paths(project_id)
+    except Exception:
+        log.exception("conductor: could not read saved files project=%s", project_id)
+        return "unknown (could not read saved files)"
+    if not paths:
+        return "none yet (new project)"
+    shown = ", ".join(paths[:15])
+    more = f", and {len(paths) - 15} more" if len(paths) > 15 else ""
+    return f"{len(paths)} files ({shown}{more})"
 
 _CONDUCTOR_TOOLS = [
     {
@@ -339,6 +358,7 @@ def conductor_node(state: GraphState) -> dict:
     system = CONDUCTOR_SYSTEM.format(
         project_name        = state.get("project_name", "Untitled"),
         project_description = state.get("project_description", ""),
+        existing_code       = _existing_code_summary(project_id),
         default_stack       = get_stack(preferred_stack).label,
         developer_level     = developer_level,
         supported_stacks    = SUPPORTED_STACK_NAMES,
@@ -459,6 +479,30 @@ def route_after_conductor(state: GraphState) -> str:
 # NODE 2 — ARTIFICER
 # ═══════════════════════════════════════════════════════════════════
 
+def _sandbox(state: dict):
+    """The build's sandbox: started if stopped, recreated from saved files if gone."""
+    return ensure_sandbox(
+        project_id = state["project_id"],
+        build_id   = state.get("build_id", ""),
+        run_config = state.get("run_config"),
+        stack      = (state.get("tech_stack_hint") or {}).get("framework"),
+    )
+
+
+def _artificer_task(build_description: str, existing_files: list[str]) -> str:
+    """The Artificer's task message; on follow-ups it lists the project's existing code."""
+    if not existing_files:
+        return f"Build this application:\n\n{build_description}"
+    listing = "\n".join(f"- {p}" for p in sorted(existing_files)[:200])
+    return (
+        "This project already has code in /workspace (restored from earlier builds):\n"
+        f"{listing}\n\n"
+        "Read the files you need and change them to do what is asked. Do not start over "
+        "or rewrite files that do not need to change. Output a fresh RUN_CONFIG block as usual.\n\n"
+        f"Request:\n\n{build_description}"
+    )
+
+
 _ARTIFICER_SYSTEM = """\
 You are Artificer, an expert software engineer AI agent.
 
@@ -476,6 +520,8 @@ RULES:
 1. Write ALL files needed for a complete, working application.
 2. Start with dependency files (requirements.txt / package.json / go.mod / pom.xml), then source, then config.
 3. Always write COMPLETE files — never partial or placeholder content.
+   Create and change files ONLY with write_file — never with shell redirection (>, cat <<EOF),
+   sed, or editors. write_file is how the platform saves your code and shows it to the user.
 4. After writing files, install dependencies with exec_command.
 5. Run check_syntax on every Python/JS file you write. For Go and Java, run the build instead, because check_syntax skips those files.
 6. The app MUST listen on port 8080 (the PORT env var is already set to 8080).
@@ -575,6 +621,11 @@ def artificer_node(state: GraphState) -> dict:
             log.error("Failed to get Docker tools for project=%s: %s", project_id, tools_error)
             tools = []  # Continue with empty tools list
 
+        # Follow-up builds continue from the project's saved code, not a blank workspace.
+        # A failed restore raises: building over a half-restored workspace would be worse.
+        restored = restore_project_files(docker, project_id)
+        task = _artificer_task(build_description, docker.list_files() if restored else [])
+
         publish(project_id, {"type": "agent_start", "role": "artificer"})
         _thinking(project_id, "Writing code...", "artificer")
 
@@ -584,7 +635,7 @@ def artificer_node(state: GraphState) -> dict:
                 project_id  = project_id,
                 role        = "artificer",
                 system      = system_prompt,
-                user_prompt = f"Build this application:\n\n{build_description}",
+                user_prompt = task,
                 tools       = tools,
                 max_iter    = 20,  # Increased from 5 to allow time for run_config generation
                 model       = settings.AGENT_MODEL,
@@ -599,7 +650,7 @@ def artificer_node(state: GraphState) -> dict:
                     project_id  = project_id,
                     role        = "artificer",
                     system      = system_prompt,
-                    user_prompt = f"Build this simple application:\n\n{build_description}",
+                    user_prompt = task,
                     tools       = tools,
                     max_iter    = 5,  # Reduced for fallback
                     model       = settings.AGENT_MODEL,
@@ -992,10 +1043,21 @@ def verify_node(state: GraphState) -> dict:
             "install_command, start_command and health_check_path for this app."
         )
 
-    docker = DockerManager.reattach(project_id=project_id, build_id=build_id, run_config=run_config_dict)
-    if not docker.container:
+    try:
+        docker = _sandbox(state).docker
+    except Exception as e:
         # Not a code problem the fixer can solve.
-        return {"error": "Build container no longer exists.", "verify_error": None}
+        log.exception("verify: sandbox unavailable build=%s", build_id)
+        return {"error": f"Build sandbox unavailable: {e}", "verify_error": None}
+
+    # The database is the source of truth: save the code exactly as it now is,
+    # including edits the agent made without write_file. Unsaved code would be
+    # lost when the sandbox is recreated, so a failure here stops the build.
+    try:
+        sync_workspace_to_db(docker, project_id)
+    except Exception as e:
+        log.exception("verify: could not save workspace project=%s", project_id)
+        return {"error": f"Could not save the generated code: {e}", "verify_error": None}
 
     try:
         app_url = docker.start_app()
@@ -1104,7 +1166,6 @@ def guardian_node(state: GraphState) -> dict:
     app_url           = state.get("app_url")
     build_description = state.get("build_description", "")
     iteration         = state.get("security_iteration", 0)
-    run_config_dict   = state.get("run_config")
 
     _thinking(project_id, "Starting security analysis...", "guardian")
     publish(project_id, {"type": "stage_change", "stage": WorkflowStage.TESTING.value})
@@ -1120,9 +1181,18 @@ def guardian_node(state: GraphState) -> dict:
             "messages_to_save":   [_msg("guardian", "assistant_response", f"⚠️ {msg}")],
         }
 
-    docker = DockerManager.reattach(project_id=project_id, build_id=build_id, run_config=run_config_dict)
-    if not app_url or not docker.container:
-        return _invalid("Security scan could not run: the app or its container is not available.")
+    if not app_url:
+        return _invalid("Security scan could not run: the app is not available.")
+    try:
+        sandbox = _sandbox(state)
+        docker = sandbox.docker
+        if sandbox.state != "running":
+            # Started again or rebuilt: the app process (and host port) are new
+            app_url = docker.start_app()
+            publish(project_id, {"type": "app_ready", "url": app_url})
+    except Exception as sandbox_error:
+        log.exception("guardian: sandbox unavailable build=%s", build_id)
+        return _invalid(f"Security scan could not run: the app's sandbox is unavailable ({sandbox_error}).")
 
     try:
         tools = get_security_tools(docker, app_url)
@@ -1169,6 +1239,7 @@ def guardian_node(state: GraphState) -> dict:
         return result
 
     update = {
+        "app_url":             app_url,   # new if the sandbox had to be restarted
         "security_status":     status,
         "security_issues":     findings,
         "security_iteration":  iteration + 1,
@@ -1357,7 +1428,8 @@ You are Artificer. Your app in /workspace needs fixing.
 
 FIX IT:
 1. Read each affected file first (read_file)
-2. Apply the fix
+2. Apply the fix by writing the complete file with write_file (never shell redirection,
+   sed or editors: write_file is how the platform saves your code)
 3. Run check_syntax after each edit
 4. Do NOT start or restart the app yourself. After you finish, the app is
    reinstalled, restarted and health-checked automatically.
@@ -1386,7 +1458,6 @@ def _fix_problem_text(state: GraphState) -> str:
 def artificer_fix_node(state: GraphState) -> dict:
     project_id      = state["project_id"]
     build_id        = state.get("build_id", "")
-    run_config_dict = state.get("run_config")
     fix_reason      = state.get("fix_reason") or "security"
 
     _thinking(
@@ -1396,9 +1467,11 @@ def artificer_fix_node(state: GraphState) -> dict:
     )
     publish(project_id, {"type": "stage_change", "stage": WorkflowStage.FIXING.value})
 
-    docker = DockerManager.reattach(project_id=project_id, build_id=build_id, run_config=run_config_dict)
-    if not docker.container:
-        return {"error": "Build container no longer exists, so fixes cannot be applied."}
+    try:
+        docker = _sandbox(state).docker
+    except Exception as e:
+        log.exception("artificer_fix: sandbox unavailable build=%s", build_id)
+        return {"error": f"Build sandbox unavailable, so fixes cannot be applied: {e}"}
 
     # .replace, not .format: the problem text holds JSON and logs with braces.
     system = _ARTIFICER_FIX_SYSTEM.replace("{problem}", _fix_problem_text(state))
@@ -1455,7 +1528,6 @@ Build description: {build_description}
 def deployer_node(state: GraphState, config: RunnableConfig) -> dict:
     project_id     = state["project_id"]
     build_id       = state.get("build_id", "")
-    run_config_dict = state.get("run_config")
 
     _thinking(project_id, "Starting deployment...", "deployer")
     publish(project_id, {"type": "stage_change", "stage": WorkflowStage.DEPLOYING.value})
@@ -1473,11 +1545,12 @@ def deployer_node(state: GraphState, config: RunnableConfig) -> dict:
         publish(project_id, {"type": "done"})
         return {"error": "deploy context missing"}
 
-    docker = DockerManager.reattach(
-        project_id = project_id,
-        build_id   = build_id,
-        run_config = run_config_dict,
-    )
+    try:
+        # Days may pass at the deploy card: the sandbox may be stopped or gone
+        docker = _sandbox(state).docker
+    except Exception as e:
+        log.exception("deployer: sandbox unavailable build=%s", build_id)
+        return {"error": f"Build sandbox unavailable, so the code cannot be pushed: {e}"}
 
     project_name = state.get("project_name", "autogenix-app")
     tools = get_deploy_tools(

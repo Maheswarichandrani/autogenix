@@ -49,6 +49,10 @@ log = logging.getLogger(__name__)
 
 _client: docker.DockerClient | None = None
 
+# Label set on every build sandbox (see spin_up and the cleanup sweep)
+CONTAINER_LABEL = "autogenix.sandbox"
+CONTAINER_PREFIX = "build-"
+
 
 class _ChunkReader(io.RawIOBase):
     """File-like wrapper over the byte-chunk generator from get_archive()."""
@@ -252,6 +256,12 @@ class DockerManager:
                     "BUILD_ID":   self.build_id,
                     "PORT":       str(INTERNAL_PORT),
                 },
+                # Lets cleanup find Autogenix sandboxes without parsing names
+                labels      = {
+                    CONTAINER_LABEL:          "1",
+                    f"{CONTAINER_LABEL}.project_id": self.project_id,
+                    f"{CONTAINER_LABEL}.build_id":   self.build_id,
+                },
                 mem_limit  = stack.mem_limit,
                 cpu_quota  = stack.cpu_quota,
                 cpu_period = self._CPU_PERIOD,
@@ -376,6 +386,73 @@ class DockerManager:
         )
         time.sleep(self.run_config.startup_wait_secs)
         log.info("App restarted for build=%s", self.build_id)
+
+    def is_running(self) -> bool:
+        if not self.container:
+            return False
+        try:
+            self.container.reload()
+        except docker.errors.NotFound:
+            self.container = None
+            return False
+        return self.container.status == "running"
+
+    def start(self) -> None:
+        """Start a stopped sandbox (files kept) and refresh its host port. Raises on failure."""
+        if not self.container:
+            raise RuntimeError(f"Container {self.container_name} does not exist")
+        try:
+            self.container.start()
+            self.container.reload()
+        except docker.errors.APIError as e:
+            raise RuntimeError(f"Could not start container {self.container_name}: {e}") from e
+        if self.container.status != "running":
+            raise RuntimeError(f"Container {self.container_name} did not start (status: {self.container.status})")
+        bindings = self.container.ports.get(f"{INTERNAL_PORT}/tcp")
+        self.app_port = bindings[0]["HostPort"] if bindings else None
+        log.info("Container %s started again", self.container_name)
+
+    def stop(self) -> None:
+        """Stop the sandbox but keep it (and its files). Safe to call when already stopped."""
+        if not self.container:
+            return
+        try:
+            self.container.reload()
+            if self.container.status == "running":
+                self.container.stop(timeout=10)
+                log.info("Container %s stopped", self.container_name)
+        except docker.errors.NotFound:
+            self.container = None
+
+    def write_files(self, files: dict[str, str]) -> int:
+        """
+        Write many files into /workspace in one archive (used to restore a
+        sandbox from the database). Unsafe paths are skipped. Returns the count.
+        """
+        if not self.container:
+            raise RuntimeError("Container not started — call spin_up() first.")
+        buf = io.BytesIO()
+        count = 0
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            for raw_path, content in files.items():
+                path = raw_path.replace("\\", "/").lstrip("/")
+                if path.startswith("workspace/"):
+                    path = path[len("workspace/"):]
+                if not path or ".." in path.split("/"):
+                    log.warning("Restore: skipping unsafe path %r", raw_path)
+                    continue
+                data = content.encode("utf-8")
+                info = tarfile.TarInfo(name=path)
+                info.size = len(data)
+                info.mode = 0o644
+                info.mtime = int(time.time())
+                tar.addfile(info, io.BytesIO(data))
+                count += 1
+        if count:
+            buf.seek(0)
+            if not self.container.put_archive("/workspace", buf.getvalue()):
+                raise RuntimeError(f"Could not restore files into {self.container_name}")
+        return count
 
     def spin_down(self) -> None:
         """Stop and remove the container. Safe to call multiple times."""
