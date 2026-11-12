@@ -1,213 +1,118 @@
 "use client";
 
-/**
- * workspace-chat.tsx
- */
-
-import React, { useEffect, useRef } from "react";
-import { WorkspacePromptInput } from "./workspace-prompt-input";
-import { ChatMessageItem } from "./chat-message-item";
-import { StreamingMessage } from "./streaming-message";
-import { Bot, Loader2, AlertCircle, Pause, Play, XCircle, RefreshCw } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import type { Message, UserAction, WorkflowStage } from "@/types/workflow";
+import { useRef } from "react";
+import { AlertCircle, Loader2 } from "lucide-react";
+import type { Message, StepFeedItem, UserAction } from "@/types/workflow";
 import type { InProgressMessage } from "@/store/workflow-store";
-import type { StepFeedItem } from "@/types/workflow";
+import { useStickToBottom } from "@/hooks/use-stick-to-bottom";
+import { ChatThread } from "./chat/chat-thread";
+import { LiveReply } from "./chat/live-reply";
+import { PausedNotice } from "./chat/paused-notice";
+import { ScrollToBottom } from "./chat/scroll-to-bottom";
+import { Composer } from "./chat/composer";
 
 interface WorkspaceChatProps {
-  projectId:               string;
-  messages:                Message[];
-  stage:                   WorkflowStage;
-  inProgressMessage:       InProgressMessage | null;
-  active_role:             string | null;
-  is_streaming:            boolean;
-  isThinking:              boolean;
-  thinkingStatus:          string | null;
-  stepFeed:                StepFeedItem[];
-  error:                   string | null;
-  isLoadingHistory:        boolean;
-  isHistoryError:          boolean;
-  isSending:               boolean;
-  isPendingWorkflowStart?: boolean;
-  isPaused?:               boolean;
-  pauseReason?:            string | null;
-  pausedRole?:             string | null;
-  pausedIteration?:        number;
-  pausedMaxIterations?:    number;
-  sendAction:              (action: UserAction) => void;
+  projectId: string;
+  projectName: string;
+  messages: Message[];
+  inProgressMessage: InProgressMessage | null;
+  isStreaming: boolean;
+  isThinking: boolean;
+  thinkingStatus: string | null;
+  stepFeed: StepFeedItem[];
+  error: string | null;
+  isLoadingHistory: boolean;
+  isPendingWorkflowStart: boolean;
+  isBusy: boolean;
+  isPaused: boolean;
+  pauseReason: string | null;
+  pausedRole: string | null;
+  pausedIteration: number;
+  pausedMaxIterations: number;
+  sendAction: (action: UserAction) => void;
 }
 
-const WorkspaceChat = ({
+/** Centred conversation column with the composer pinned underneath. */
+export function WorkspaceChat({
   projectId,
+  projectName,
   messages,
-  stage,
   inProgressMessage,
-  is_streaming,
+  isStreaming,
   isThinking,
   thinkingStatus,
   stepFeed,
   error,
   isLoadingHistory,
-  isSending,
-  isPendingWorkflowStart = false,
-  isPaused = false,
-  pauseReason = null,
-  pausedRole = null,
-  pausedIteration = 0,
-  pausedMaxIterations = 0,
+  isPendingWorkflowStart,
+  isBusy,
+  isPaused,
+  pauseReason,
+  pausedRole,
+  pausedIteration,
+  pausedMaxIterations,
   sendAction,
-}: WorkspaceChatProps) => {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+}: WorkspaceChatProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const showLive = !!inProgressMessage || isThinking || isPendingWorkflowStart;
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length, inProgressMessage?.text, isThinking, isPendingWorkflowStart, stepFeed.length]);
+  // Anything that grows the conversation re-pins the view (if already at the bottom)
+  const contentKey = `${messages.length}|${inProgressMessage?.text.length ?? 0}|${stepFeed.length}|${showLive}|${isPaused}`;
+  const { isAtBottom, scrollToBottom } = useStickToBottom(scrollRef, contentKey);
 
-  const handleSubmit = (content: string) => {
-    if (!content.trim()) return;
-    sendAction({ action: "send_message", content: content.trim() });
-  };
-
-  const isEmpty =
-    !isLoadingHistory &&
-    messages.length === 0 &&
-    !inProgressMessage &&
-    !isThinking &&
-    !isPendingWorkflowStart &&
-    stepFeed.length === 0;
-
-  const isBusy = isSending || is_streaming || isThinking || isPendingWorkflowStart ||
-    ["building", "testing", "fixing", "deploying"].includes(stage);
+  const send = (content: string) => sendAction({ action: "send_message", content });
 
   return (
-    <aside className="w-full h-full overflow-hidden flex flex-col">
-      <div className="flex-1 overflow-y-auto overflow-x-hidden scrollbar-hide px-4">
-        <div className="max-w-3xl mx-auto py-4 space-y-2">
-
+    <div className="flex h-full min-h-0 flex-col">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+        <div className="mx-auto flex w-full max-w-240 flex-col gap-8 px-4 pt-8 pb-10 sm:px-8 sm:pt-12">
           {isLoadingHistory && (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="size-6 animate-spin text-muted-foreground" />
+            <div className="flex justify-center py-10">
+              <Loader2 className="size-5 animate-spin text-muted-foreground" />
             </div>
+          )}
+
+          <ChatThread messages={messages} projectName={projectName} isBusy={isBusy} onRetry={send} />
+
+          {showLive && (
+            <LiveReply
+              message={inProgressMessage}
+              isStreaming={isStreaming}
+              thinkingStatus={thinkingStatus ?? (inProgressMessage ? null : "Preparing your request")}
+              stepFeed={stepFeed}
+            />
+          )}
+
+          {isPaused && (
+            <PausedNotice
+              role={pausedRole}
+              iteration={pausedIteration}
+              maxIterations={pausedMaxIterations}
+              reason={pauseReason}
+              sendAction={sendAction}
+            />
           )}
 
           {error && (
-            <Alert variant="destructive" className="mb-4">
-              <AlertCircle className="size-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-
-          {/* Committed history */}
-          {messages.map((message) => (
-            <ChatMessageItem key={message.id} message={message} />
-          ))}
-
-          {/* Interim loading state - between message sent and workflow start */}
-          {isPendingWorkflowStart && !inProgressMessage && !isThinking && (
-            <div className="flex items-center gap-3 py-4 px-4 text-sm">
-              <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                <Bot className="size-4 text-primary" />
-              </div>
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="size-4 animate-spin shrink-0" />
-                <span className="animate-pulse">Preparing your request...</span>
-              </div>
+            <div
+              role="alert"
+              className="flex items-start gap-2.5 rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+            >
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
+              <span>{error}</span>
             </div>
           )}
-
-          {/* Live in-progress message with step feed */}
-          {inProgressMessage ? (
-            <StreamingMessage
-              inProgressMessage={inProgressMessage}
-              isStreaming={is_streaming}
-              isThinking={isThinking}
-              thinkingStatus={thinkingStatus}
-              stepFeed={stepFeed}
-            />
-          ) : isThinking && thinkingStatus ? (
-            /* Thinking before agent_start — minimal indicator */
-            <div className="flex items-center gap-2 py-3 px-4 text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin shrink-0" />
-              <span className="animate-pulse">{thinkingStatus}</span>
-            </div>
-          ) : null}
-
-          {/* Agent paused — iteration budget exhausted, waiting for user */}
-          {isPaused && (
-            <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/5 p-4 my-3 space-y-3">
-              <div className="flex items-center gap-2 text-sm font-medium text-yellow-600 dark:text-yellow-400">
-                <Pause className="size-4 shrink-0" />
-                <span>
-                  Agent paused — {pausedRole} completed {pausedIteration}/{pausedMaxIterations} iterations
-                </span>
-              </div>
-              {pauseReason && (
-                <p className="text-xs text-muted-foreground">{pauseReason}</p>
-              )}
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={() => sendAction({ action: "agent_continue" })}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-                >
-                  <Play className="size-3" />
-                  Continue
-                </button>
-                <button
-                  onClick={() => {
-                    const model = window.prompt("Enter model name (e.g. gpt-4o, claude-sonnet-4-20250514):");
-                    if (model?.trim()) {
-                      sendAction({ action: "agent_switch_model", model: model.trim() });
-                    }
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground hover:bg-secondary/80 transition-colors"
-                >
-                  <RefreshCw className="size-3" />
-                  Switch Model
-                </button>
-                <button
-                  onClick={() => sendAction({ action: "agent_cancel" })}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-destructive/10 px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 transition-colors"
-                >
-                  <XCircle className="size-3" />
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {isEmpty && (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <div className="size-16 rounded-full bg-primary/10 flex items-center justify-center mb-4">
-                <Bot className="size-8 text-primary" />
-              </div>
-              <h3 className="text-lg font-semibold mb-2">Start Building with Autogenix</h3>
-              <p className="text-sm text-muted-foreground max-w-md">
-                Describe what you want to build and the AI agents will handle
-                everything — from coding to testing to deployment.
-              </p>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
         </div>
       </div>
 
-      <div className="shrink-0 p-3 sm:p-4 bg-card/10">
-        <div className="max-w-3xl mx-auto">
-          <WorkspacePromptInput
-            projectId={projectId}
-            onSubmit={handleSubmit}
-            isProcessing={isBusy}
-            placeholder={
-              isBusy
-                ? "Build in progress — please wait..."
-                : "Ask Autogenix to build, modify, or explain..."
-            }
-          />
+      <div className="shrink-0 px-3 pb-3 sm:px-6 sm:pb-4">
+        <div className="relative mx-auto w-full max-w-240">
+          <ScrollToBottom visible={!isAtBottom} onClick={scrollToBottom} />
+          <Composer projectId={projectId} isBusy={isBusy} onSend={send} />
         </div>
       </div>
-    </aside>
+    </div>
   );
-};
+}
 
 export default WorkspaceChat;

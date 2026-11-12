@@ -26,8 +26,7 @@
  */
 
 import { create } from "zustand";
-import type { WorkflowStage, Message, SSEEvent, StepFeedItem } from "@/types/workflow";
-import { useRightSidebar } from "@/store/right-sidebar-store";
+import type { WorkflowStage, Message, SSEEvent, StepFeedItem, SavedStep } from "@/types/workflow";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -72,6 +71,9 @@ interface WorkflowStore {
   // ── Message being assembled right now from text_chunk events
   inProgressMessage: InProgressMessage | null;
 
+  // ── Sandbox URL of the running app (session only, from app_ready)
+  appUrl: string | null;
+
   // ── Actions
   hydrateMessages: (messages: Message[]) => void;
   addOptimisticMessage: (message: Message) => void;
@@ -101,11 +103,22 @@ const INITIAL_STATE = {
   thinkingStatus: null as string | null,
   stepFeed: [] as StepFeedItem[],
   inProgressMessage: null as InProgressMessage | null,
+  appUrl: null as string | null,
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function commitInProgress(ip: InProgressMessage): Message | null {
+function toSavedSteps(steps: StepFeedItem[]): SavedStep[] {
+  return steps.map((st) => ({
+    tool:     st.tool,
+    status:   st.status,
+    is_error: !!st.is_error,
+    input:    st.input ?? "",
+    result:   st.result ?? "",
+  }));
+}
+
+function commitInProgress(ip: InProgressMessage, steps: StepFeedItem[] = []): Message | null {
   const content: Message["content"] = [];
 
   if (ip.artifact) {
@@ -127,6 +140,7 @@ function commitInProgress(ip: InProgressMessage): Message | null {
     role: ip.role as Message["role"],
     message_type: "assistant_response",
     content,
+    metadata: steps.length ? { steps: toSavedSteps(steps) } : null,
     created_at: new Date().toISOString(),
   };
 }
@@ -213,9 +227,11 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       // ── Stage transitions ─────────────────────────────────────
       case "stage_change":
         set({ stage: event.stage, error: null });
-        if (event.stage === "building") {
-          useRightSidebar.getState().showCode();
-        }
+        break;
+
+      // ── Running app URL for the code panel preview ────────────
+      case "app_ready":
+        set({ appUrl: event.url });
         break;
 
       // ── Thinking (replaces single status bar) ─────────────────
@@ -238,6 +254,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
           status: event.status,
           role: event.role,
           state: "pending",
+          startedAt: Date.now(),
         };
         set((s) => ({
           stepFeed: [...s.stepFeed, newStep],
@@ -287,7 +304,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       // ── Agent starting ────────────────────────────────────────
       case "agent_start": {
         const existing = get().inProgressMessage;
-        const toCommit = existing ? commitInProgress(existing) : null;
+        const toCommit = existing ? commitInProgress(existing, get().stepFeed) : null;
 
         set((s) => ({
           active_role: event.role,
@@ -316,7 +333,6 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
             is_streaming: true,
             isThinking: false,
             thinkingStatus: null,
-            stepFeed: [],  // clear step feed when text starts flowing
             active_role: event.role,
             inProgressMessage: currentMessage
               ? {
@@ -358,7 +374,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       case "done": {
         const ip = get().inProgressMessage;
         set((s) => {
-          const committed = ip ? commitInProgress(ip) : null;
+          const committed = ip ? commitInProgress(ip, get().stepFeed) : null;
           const updatedMessages = committed ? [...s.messages, committed] : s.messages;
 
           // Sort by created_at to maintain chronological order
@@ -414,7 +430,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       case "build_failed":
         set((s) => {
           const ip = s.inProgressMessage;
-          const committed = ip ? commitInProgress(ip) : null;
+          const committed = ip ? commitInProgress(ip, get().stepFeed) : null;
           const updatedMessages = committed ? [...s.messages, committed] : s.messages;
 
           // Sort by created_at to maintain chronological order
@@ -483,7 +499,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
       case "agent_cancelled":
         set((s) => {
           const ip = s.inProgressMessage;
-          const committed = ip ? commitInProgress(ip) : null;
+          const committed = ip ? commitInProgress(ip, get().stepFeed) : null;
           const updatedMessages = committed ? [...s.messages, committed] : s.messages;
           return {
             isPaused: false,

@@ -170,14 +170,42 @@ def _stream_text(project_id: str, text: str, role: str) -> None:
     publish(project_id, {"type": "agent_done", "role": role})
 
 
-def _msg(role: str, message_type: str, text: str) -> dict:
+MAX_SAVED_STEPS = 60
+
+
+def _steps_metadata(tool_log: list | None) -> dict | None:
+    """
+    Display copy of an agent's tool steps, saved with its message so the chat
+    can show the step summary after a reload. Only the truncated previews the
+    browser already received live: status text, redacted input, short result.
+    """
+    steps = []
+    for entry in (tool_log or [])[:MAX_SAVED_STEPS]:
+        if not isinstance(entry, dict):
+            continue
+        output = str(entry.get("output") or "")
+        steps.append({
+            "tool":     entry.get("tool", ""),
+            "status":   entry.get("status") or entry.get("tool", ""),
+            "is_error": bool(entry.get("is_error", output.startswith("❌"))),
+            "input":    str(entry.get("preview") or "")[:300],
+            "result":   output[:500],
+        })
+    return {"steps": steps} if steps else None
+
+
+def _msg(role: str, message_type: str, text: str, steps: list | None = None) -> dict:
     from datetime import datetime, timezone
-    return {
+    msg = {
         "role":         role,
         "message_type": message_type,
         "content":      [{"type": "text", "content": text}],
         "created_at":   datetime.now(timezone.utc).isoformat(),
     }
+    metadata = _steps_metadata(steps)
+    if metadata:
+        msg["metadata"] = metadata
+    return msg
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -614,7 +642,7 @@ def artificer_node(state: GraphState) -> dict:
             "build_id":        build_id,
             "run_config":      run_config_obj.to_dict() if run_config_obj else None,
             "app_url":         None,
-            "messages_to_save": [_msg("artificer", "assistant_response", final_text or "Build complete.")],
+            "messages_to_save": [_msg("artificer", "assistant_response", final_text or "Build complete.", tool_log)],
         }
 
     except Exception as e:
@@ -941,6 +969,8 @@ def verify_node(state: GraphState) -> dict:
         return _failed(str(e))
 
     publish(project_id, {"type": "step", "role": "artificer", "label": "App is running and healthy"})
+    # Lets the code panel preview the running sandbox (session only).
+    publish(project_id, {"type": "app_ready", "url": app_url})
     return {"app_url": app_url, "verify_error": None}
 
 
@@ -1093,14 +1123,14 @@ def guardian_node(state: GraphState) -> dict:
             "so the build cannot be marked safe."
         )
         if final_text:
-            result["messages_to_save"].insert(0, _msg("guardian", "assistant_response", final_text))
+            result["messages_to_save"].insert(0, _msg("guardian", "assistant_response", final_text, tool_log))
         return result
 
     status, findings = _parse_security_verdict(final_text)
     if status == "invalid":
         result = _invalid("Security scan did not return a valid verdict, so the build cannot be marked safe.")
         result["messages_to_save"] = [
-            _msg("guardian", "assistant_response", final_text or "Security scan returned no report."),
+            _msg("guardian", "assistant_response", final_text or "Security scan returned no report.", tool_log),
         ]
         return result
 
@@ -1109,7 +1139,7 @@ def guardian_node(state: GraphState) -> dict:
         "security_issues":     findings,
         "security_iteration":  iteration + 1,
         "all_security_issues": state.get("all_security_issues", []) + findings,
-        "messages_to_save":    [_msg("guardian", "assistant_response", final_text or "Security scan complete.")],
+        "messages_to_save":    [_msg("guardian", "assistant_response", final_text or "Security scan complete.", tool_log)],
     }
     if status == "issues":
         update["fix_reason"] = "security"
@@ -1355,7 +1385,7 @@ def artificer_fix_node(state: GraphState) -> dict:
     publish(project_id, {"type": "agent_done", "role": "artificer"})
 
     update: dict = {
-        "messages_to_save": [_msg("artificer", "assistant_response", final_text or "Applied fixes.")],
+        "messages_to_save": [_msg("artificer", "assistant_response", final_text or "Applied fixes.", tool_log)],
     }
     new_run_config = _extract_run_config(tool_log) if tool_log else None
     if new_run_config:
@@ -1465,7 +1495,7 @@ def deployer_node(state: GraphState, config: RunnableConfig) -> dict:
     return {
         "repo_url":      repo_url,
         "deploy_url":    deploy_url,
-        "messages_to_save": [_msg("deployer", "assistant_response", final_text or "Deployment complete.")],
+        "messages_to_save": [_msg("deployer", "assistant_response", final_text or "Deployment complete.", tool_log)],
     }
 
 

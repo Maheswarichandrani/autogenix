@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
-import { WorkspaceHeader } from "@/components/workspace/workspace-header";
 import { TaskPanel } from "@/components/workspace/task-panel";
 import { PreviewSidebar } from "@/components/workspace/preview-sidebar";
 import { WorkspacePromptInput } from "@/components/workspace/workspace-prompt-input";
@@ -162,7 +161,6 @@ function ChatMessageItem({ message }: { message: ChatMessage }) {
 
 // Main workspace page
 export default function WorkspacePage() {
-    const [activeTab, setActiveTab] = useState("preview");
     const [isBuilding, setIsBuilding] = useState(false);
     const [messages, setMessages] = useState<ChatMessage[]>(sampleMessages);
 
@@ -194,14 +192,10 @@ export default function WorkspacePage() {
     return (
         <div className="h-screen w-screen bg-background flex flex-col overflow-hidden">
             {/* Header */}
-            <WorkspaceHeader
-                projectName="Fintech API"
-                isBuilding={isBuilding}
-                activeTab={activeTab}
-                onTabChange={setActiveTab}
-                onDeploy={() => console.log("Deploy")}
-                onShare={() => console.log("Share")}
-            />
+            {/* Mock page: the real workspace header needs a project and the sidebar provider */}
+            <header className="flex h-14 items-center border-b border-border px-4 font-medium">
+                Fintech API
+            </header>
 
             {/* Main content with resizable panels — fixed height = screen minus header */}
             <div style={{ height: "calc(100vh - 56px)" }}>
