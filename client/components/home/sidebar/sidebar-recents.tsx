@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -44,6 +44,8 @@ function StatusDot({ activity }: { activity?: ProjectActivity | null }) {
 }
 const OPEN_KEY = "autogenix-sidebar-recents-open";
 
+const OPEN_EVENT = "autogenix-sidebar-recents-open-change";
+
 function readOpen(): boolean {
   try {
     return localStorage.getItem(OPEN_KEY) !== "0";
@@ -52,11 +54,37 @@ function readOpen(): boolean {
   }
 }
 
+function subscribeOpen(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(OPEN_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(OPEN_EVENT, onChange);
+  };
+}
+
+/**
+ * Remembered open/closed state. The server has no localStorage, so the server
+ * render and hydration both use "open"; the saved value applies right after.
+ */
+function useRecentsOpen(): [boolean, () => void] {
+  const open = useSyncExternalStore(subscribeOpen, readOpen, () => true);
+  const toggle = () => {
+    try {
+      localStorage.setItem(OPEN_KEY, open ? "0" : "1");
+    } catch {
+      /* storage blocked: the section just stays as it is */
+    }
+    window.dispatchEvent(new Event(OPEN_EVENT));
+  };
+  return [open, toggle];
+}
+
 /** The user's projects, newest first, with a status dot; the current one is highlighted. */
 export function SidebarRecents() {
   const pathname = usePathname();
   const { isMobile, setOpenMobile } = useSidebar();
-  const [open, setOpen] = useState(() => (typeof window === "undefined" ? true : readOpen()));
+  const [open, toggle] = useRecentsOpen();
 
   const recents = useQuery({
     queryKey: ["projects", "recents"],
@@ -67,17 +95,6 @@ export function SidebarRecents() {
     },
     staleTime: 30_000,
   });
-
-  const toggle = () => {
-    setOpen((v) => {
-      try {
-        localStorage.setItem(OPEN_KEY, v ? "0" : "1");
-      } catch {
-        /* storage blocked: session only */
-      }
-      return !v;
-    });
-  };
 
   const projects = recents.data?.projects ?? [];
   const hasMore = (recents.data?.total ?? 0) > projects.length;
